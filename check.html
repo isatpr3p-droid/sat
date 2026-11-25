@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>Check a mock · isatprep</title>
+  <link rel="icon" href="img/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="vendor/katex/katex.min.css?v=3f94e1b737">
+  <link rel="stylesheet" href="css/app.css?v=121b333ee3">
+  <style>
+    body { background: var(--bg); }
+    .ck { max-width: 1100px; margin: 0 auto; padding: 0 clamp(14px, 3vw, 32px) 60px; }
+    .ck-status { border-radius: 16px; padding: 18px 20px; margin: 8px 0 18px; font-size: 16px; }
+    .ck-status.ok { background: var(--ok-50); color: #0f6a40; }
+    .ck-status.bad { background: var(--bad-50); color: #9b1c22; }
+    .ck-status ul { margin: 8px 0 0; padding-left: 20px; }
+    .ck-form { display: flex; gap: 8px; margin: 0 0 14px; }
+    .ck-form input { flex: 1; height: 42px; border: 1.5px solid var(--line-2); border-radius: 10px; padding: 0 12px; font-size: 15px; }
+    .ck-toc { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 14px; }
+    .ck-toc a { background: #fff; border: 1px solid var(--line); padding: 6px 12px; border-radius: 999px; text-decoration: none; color: var(--ink); font-weight: 650; font-size: 13.5px; }
+    .ck-mod h2 { position: sticky; top: 0; background: var(--bg); padding: 14px 0 10px; margin: 18px 0 6px; z-index: 2; font-size: 20px; }
+    .ck-q { background: #fff; border: 1px solid var(--line); border-radius: 16px; padding: 18px 20px; margin: 12px 0; }
+    .ck-q.err { border-color: var(--bad); box-shadow: 0 0 0 2px var(--bad-50); }
+    .ck-meta { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; font-size: 13px; }
+    .ck-meta .num { background: #12151d; color: #fff; border-radius: 6px; padding: 2px 9px; font-weight: 750; }
+    .ck-meta .src { color: var(--muted); margin-left: auto; }
+    .ck-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+    .ck-cols.one { grid-template-columns: 1fr; }
+    .ck-q .prompt { margin-top: 0; }
+    .ck-ans { margin-top: 10px; font-weight: 700; color: #0f6a40; }
+    .ck-q .explain { margin-top: 12px; }
+    .ck-errs { color: var(--bad); font-weight: 650; margin-top: 8px; }
+    @media (max-width: 860px) { .ck-cols { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <header class="brandbar"><span class="wordmark"><span class="wm-mark"><svg viewBox="0 0 32 32"><rect width="32" height="32" rx="9" fill="#4f5df0"/><circle cx="16" cy="9" r="2.6" fill="#fff"/><rect x="13.6" y="13.2" width="4.8" height="11.5" rx="2.4" fill="#fff"/></svg></span><span class="wm-text">Mock checker</span></span><a class="btn ghost" id="tryLink" href="#">Try it in preview mode</a></header>
+  <main class="ck">
+    <form class="ck-form" id="f"><input id="tid" placeholder="Test ID, e.g. mock1-q7rx" autocomplete="off"><button class="btn primary">Check</button></form>
+    <div id="out"><p class="muted">Enter a test ID to validate it and proofread every question.</p></div>
+  </main>
+  <script src="vendor/katex/katex.min.js?v=4881bfc93a"></script>
+  <script src="vendor/katex/auto-render.min.js?v=61e52860f7"></script>
+  <script src="js/config.js?v=8903e05ce7"></script>
+  <script src="js/core.js?v=9bc840e032"></script>
+  <script>
+  (function () {
+    var C = window.SATCore;
+    var p = new URLSearchParams(location.search), id = p.get('t') || '';
+    var out = document.getElementById('out');
+    document.getElementById('tid').value = id;
+    document.getElementById('f').addEventListener('submit', function (e) { e.preventDefault(); var v = document.getElementById('tid').value.trim(); if (v) location.search = '?t=' + encodeURIComponent(v); });
+    if (!id) return;
+    document.getElementById('tryLink').href = 'index.html?t=' + encodeURIComponent(id) + '&preview=1';
+    var s = document.createElement('script');
+    s.src = 'tests/' + encodeURIComponent(id) + '.js?v=' + Date.now();
+    s.onerror = function () { out.innerHTML = '<div class="ck-status bad"><b>Not found:</b> tests/' + id + '.js</div>'; };
+    s.onload = function () { run((window.SAT_TESTS || {})[id]); };
+    document.head.appendChild(s);
+
+    function run(T) {
+      if (!T) { out.innerHTML = '<div class="ck-status bad">The file loaded but did not define test "' + id + '".</div>'; return; }
+      try { C.prepareTest(T); } catch (e) { out.innerHTML = '<div class="ck-status bad">The answer keys in this file could not be decoded. Rebuild it with build.py.</div>'; return; }
+      var problems = C.validateTest(T);
+      var names = { rw1: 'R&W · Module 1', rw2Easy: 'R&W · Module 2 (easier)', rw2Hard: 'R&W · Module 2 (harder)', math1: 'Math · Module 1', math2Easy: 'Math · Module 2 (easier)', math2Hard: 'Math · Module 2 (harder)' };
+      var html = '<div id="status"></div><p><b>' + T.title + '</b> · id <code>' + T.id + '</code> · opens: ' + (T.opensAt || 'now') + ' · closes: ' + (T.closesAt || 'never') + ' · routing: R&W ≥ ' + T.routing.rw + ', Math ≥ ' + T.routing.math + '</p>';
+      html += '<nav class="ck-toc">' + Object.keys(names).map(function (k) { return '<a href="#' + k + '">' + names[k] + '</a>'; }).join('') + '</nav>';
+      Object.keys(names).forEach(function (k) {
+        html += '<section class="ck-mod" id="' + k + '"><h2>' + names[k] + ' · ' + T.modules[k].length + ' questions</h2>';
+        T.modules[k].forEach(function (q, i) {
+          var ch = '';
+          if (q.type === 'mcq') ch = '<div class="choices review">' + q.choices.map(function (c, j) { var L = 'ABCD'[j]; return '<div class="choice-row' + (L === q.answer ? ' key' : '') + '"><div class="choice"><span class="letter">' + L + '</span><span class="ctext">' + c + '</span></div></div>'; }).join('') + '</div>';
+          else ch = '<div class="ck-ans">Student-produced response · key: ' + q.answer + '</div>';
+          html += '<article class="ck-q" data-qid="' + q.id + '"><div class="ck-meta"><span class="num">' + (i + 1) + '</span><span class="chip">' + q.domain + '</span>' + (q.skill ? '<span class="chip">' + q.skill + '</span>' : '') + '<span class="chip">' + q.type.toUpperCase() + '</span><span class="src">' + (q.src || '') + '</span></div>' +
+            '<div class="ck-cols' + (q.passage ? '' : ' one') + '">' + (q.passage ? '<div class="passage">' + q.passage + '</div>' : '') + '<div><div class="prompt">' + q.prompt + '</div>' + ch + (q.type === 'mcq' ? '<div class="ck-ans">Answer: ' + q.answer + '</div>' : '') + '</div></div>' +
+            '<div class="explain"><b>Explanation</b><div>' + q.explanation + '</div></div><div class="ck-errs"></div></article>';
+        });
+        html += '</section>';
+      });
+      out.innerHTML = html;
+      var mathErrors = 0;
+      document.querySelectorAll('.ck-q').forEach(function (el) {
+        renderMathInElement(el, { delimiters: [{ left: '\\(', right: '\\)', display: false }, { left: '\\[', right: '\\]', display: true }], throwOnError: false,
+          errorCallback: function (msg) { mathErrors++; el.classList.add('err'); el.querySelector('.ck-errs').textContent += 'Math error: ' + msg + ' '; } });
+        if (el.querySelector('.katex-error')) { mathErrors++; el.classList.add('err'); el.querySelector('.ck-errs').textContent += 'A formula failed to render. '; }
+        var raw = el.textContent;
+        if (/\\\(|\\\)/.test(raw)) { el.classList.add('err'); el.querySelector('.ck-errs').textContent += 'Unrendered math delimiters. '; mathErrors++; }
+      });
+      if (mathErrors) problems.push(mathErrors + ' formula problem(s) — see the red cards below.');
+      var st = document.getElementById('status');
+      st.className = 'ck-status ' + (problems.length ? 'bad' : 'ok');
+      st.innerHTML = problems.length ? '<b>Fix these before publishing:</b><ul>' + problems.map(function (x) { return '<li>' + x + '</li>'; }).join('') + '</ul>'
+        : '<b>✓ Ready to publish.</b> 147 questions checked: counts, answer keys, typed-answer keys, and every formula render correctly.';
+    }
+  })();
+  </script>
+</body>
+</html>
