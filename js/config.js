@@ -7,7 +7,8 @@ window.SAT_CONFIG = {
 
   // Google Apps Script web-app URL that saves results into your Google Sheet (see README.md → "Results sheet").
   // Leave '' while testing — results then stay on the device only.
-  resultsUrl: '',
+  // Sheet: "isatprep results" (Google account isatpr3p@gmail.com) · Apps Script deployment "isatprep results v1".
+  resultsUrl: 'https://script.google.com/macros/s/AKfycbyeQDEJoThNaWCdQOe2MzafXG257rtnXwhaCiaMvoexorM2U1YYgmvXWvsbEFbSQfA9/exec',
 
   // Desmos graphing calculator API key (isatprep's own key from Desmos).
   desmosKey: 'bb33e0cf722d4c86a5648b4b5dd872ff',
