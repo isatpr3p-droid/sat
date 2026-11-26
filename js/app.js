@@ -3,7 +3,7 @@
    so a refresh, a closed tab, or a dead battery never loses answers. Timers use absolute end times. */
 (function () {
   'use strict';
-  var APP_BUILD = 'f27d693924'; // stamped by build/build.py — must match SATCore.BUILD in core.js
+  var APP_BUILD = '600753b009'; // stamped by build/build.py — must match SATCore.BUILD in core.js
   var C = window.SATCore;
   var CFG = window.SAT_CONFIG || {};
 
@@ -893,8 +893,8 @@
         '<div class="brk-actions"><button class="btn primary big" data-action="resume">Resume testing now ' + I.chevRight + '</button>' +
         '<button class="btn ghost big" data-action="save-exit">Save and exit</button></div>' +
         '<div class="music"><div class="music-row"><button class="music-btn' + (Music.on ? ' on' : '') + '" id="musicBtn" data-action="music" aria-pressed="' + (Music.on ? 'true' : 'false') + '">' +
-          '<span class="eq" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span class="lbl">' + (Music.on ? 'Stop the beat' : 'isatprep phonk beat') + '</span></button>' +
-          (CFG.breakMusicYoutube ? '<button class="music-btn" id="ytBtn" data-action="music-yt" aria-pressed="false"><span class="eq" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span class="lbl">' + esc(CFG.breakMusicYoutubeLabel || 'Phonk mix (YouTube)') + '</span></button>' : '') +
+          '<span class="eqz" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span class="lbl">' + (Music.on ? 'Stop the beat' : 'isatprep phonk beat') + '</span></button>' +
+          (CFG.breakMusicYoutube ? '<button class="music-btn" id="ytBtn" data-action="music-yt" aria-pressed="false"><span class="eqz" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span class="lbl">' + esc(CFG.breakMusicYoutubeLabel || 'Phonk mix (YouTube)') + '</span></button>' : '') +
           '</div><div class="yt-box" id="ytBox" hidden></div><small>Optional · plays only during the break</small></div>' +
       '</div></main>';
   }
