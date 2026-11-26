@@ -3,12 +3,14 @@
    so a refresh, a closed tab, or a dead battery never loses answers. Timers use absolute end times. */
 (function () {
   'use strict';
-  var APP_BUILD = '0578fa11f6'; // stamped by build/build.py — must match SATCore.BUILD in core.js
+  var APP_BUILD = 'f27d693924'; // stamped by build/build.py — must match SATCore.BUILD in core.js
   var C = window.SATCore;
   var CFG = window.SAT_CONFIG || {};
 
   // Version handshake: if a browser cache ever pairs an old file with a new one, reload once with fresh files.
-  if (!C || C.BUILD !== APP_BUILD || typeof C.prepareTest !== 'function') {
+  // The stylesheet carries the same build id (--build); an old cached stylesheet has none or a different one.
+  var cssBuild = null; try { cssBuild = getComputedStyle(document.documentElement).getPropertyValue('--build').replace(/["'\s]/g, ''); } catch (e) { }
+  if (!C || C.BUILD !== APP_BUILD || typeof C.prepareTest !== 'function' || (cssBuild !== null && cssBuild !== APP_BUILD)) {
     var flag = 'isatprep:reloaded';
     var tried = false; try { tried = window.sessionStorage.getItem(flag) === '1'; window.sessionStorage.setItem(flag, '1'); } catch (e) { }
     if (!tried) {
@@ -31,6 +33,22 @@
   function uid(n) { var a = 'abcdefghijkmnpqrstuvwxyz23456789', s = ''; for (var i = 0; i < (n || 12); i++) s += a.charAt(Math.floor(Math.random() * a.length)); return s; }
   function $(sel, el) { return (el || document).querySelector(sel); }
   function $$(sel, el) { return Array.prototype.slice.call((el || document).querySelectorAll(sel)); }
+  // Full screen is enforced on laptops/desktops only (phones and Telegram's in-app browser can't do it).
+  var FS_OK = (function () {
+    var d = document.documentElement;
+    var coarse = false; try { coarse = window.matchMedia('(pointer: coarse)').matches && !window.matchMedia('(pointer: fine)').matches; } catch (e) { }
+    return !!(d.requestFullscreen || d.webkitRequestFullscreen) && !coarse;
+  })();
+  function isFullscreen() {
+    if (document.fullscreenElement || document.webkitFullscreenElement) return true;
+    // F11 / the green macOS button make the window fill the screen without the Fullscreen API.
+    return Math.abs(window.innerWidth - screen.width) <= 2 && Math.abs(window.innerHeight - screen.height) <= 2;
+  }
+  function enterFullscreen() {
+    if (!FS_OK || isFullscreen()) return;
+    var d = document.documentElement;
+    try { var p = (d.requestFullscreen || d.webkitRequestFullscreen).call(d); if (p && p.catch) p.catch(function () { }); } catch (e) { }
+  }
   function isNarrow() { return window.matchMedia('(max-width: 899px)').matches; }
   function renderMath(el) {
     if (!el || !window.renderMathInElement) return;
@@ -115,12 +133,14 @@
     try {
       var s = JSON.parse(raw);
       if (!s || s.v !== 1 || s.testId !== T.id || !s.mods) return null;
+      if (!s.integrity) s.integrity = { fsExits: 0, saveExits: 0 };
       return s;
     } catch (e) { return null; }
   }
   function freshState() {
     return { v: 1, testId: T.id, deviceId: deviceId(), student: null, status: 'welcome', stage: null, mods: {}, routes: {},
-      breakEndsAt: null, startedAt: null, finishedAt: null, result: null, submission: null, ui: { timerHidden: false } };
+      breakEndsAt: null, startedAt: null, finishedAt: null, result: null, submission: null, ui: { timerHidden: false },
+      gate: null, integrity: { fsExits: 0, saveExits: 0 } };
   }
 
   function routeFor(stage) { return stage === 'rw2' ? S.routes.rw : stage === 'm2' ? S.routes.math : null; }
@@ -187,7 +207,7 @@
   // After a reload: submit (once) a module whose time ran out while the page was closed; finish an expired break.
   function reconcileOnLoad() {
     var st = S.stage;
-    if (!st) return;
+    if (!st || S.gate) return;
     if (st === 'break') { if (S.breakEndsAt && now() >= S.breakEndsAt) enterStage('m1', { quiet: true }); return; }
     var m = S.mods[st];
     if (m && !m.submittedAt && m.endsAt && now() >= m.endsAt) {
@@ -199,7 +219,7 @@
   function route() {
     closeLayer();
     if (S.status === 'done') return screenResults();
-    if (S.status === 'testing') return S.stage === 'break' ? screenBreak() : screenTest(true);
+    if (S.status === 'testing') return S.gate ? screenGate() : S.stage === 'break' ? screenBreak() : screenTest(true);
     var w = windowStatus();
     if (w === 'notOpen') return screenMessage('notOpen');
     if (w === 'closed') return screenMessage('closed');
@@ -236,6 +256,7 @@
     save();
     screenTest(true);
     if (C.STAGE_INFO[stage].moduleNo === 2 && !opts.quiet) toast(C.STAGE_INFO[stage].short + ' has started. The clock is running.', 'info', 4500);
+    paintLock();
     if (C.STAGE_INFO[stage].moduleNo === 1 && !m.dirShown) { m.dirShown = true; save(); openDirections(); }
     if (stage === 'rw2' || stage === 'm1') preloadDesmos();
   }
@@ -255,9 +276,37 @@
       var nx = nextStage(st);
       save();
       closeLayer();
-      if (nx) enterStage(nx, { quiet: quiet });
+      if (nx === 'rw2' || nx === 'm2') openGate(nx);     // Module 2 waits until the student presses Start
+      else if (nx) enterStage(nx, { quiet: quiet });
       else finish();
     } finally { busy = false; }
+  }
+
+  // Between modules: the next module's clock doesn't start until the student presses Start,
+  // so this is the one place where they can Save and exit and come back later.
+  function openGate(stage) {
+    S.stage = stage;
+    S.gate = stage;
+    if (!S.mods[stage]) S.mods[stage] = newMod(stage);
+    stopBreakMusic();
+    save();
+    screenGate();
+  }
+  function startFromGate() {
+    if (!S.gate || busy) return;
+    enterFullscreen();
+    var st = S.gate;
+    busy = true;
+    try { S.gate = null; S.exited = false; enterStage(st); } finally { busy = false; }
+  }
+  function saveAndExit() {
+    if (S.stage === 'break' && !S.gate) { S.breakEndsAt = null; openGate('m1'); }
+    if (!S.gate) return;
+    S.exited = true;
+    S.integrity.saveExits = (S.integrity.saveExits || 0) + 1;
+    save();
+    try { if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen(); } catch (e) { }
+    screenGate();
   }
 
   function finish() {
@@ -302,13 +351,15 @@
       return;
     }
     if (S.status !== 'testing') return;
+    paintLock();
+    if (S.gate) return;
     if (S.stage === 'break') {
       var left = S.breakEndsAt - now();
       var el = $('#breakClock');
       if (el) el.textContent = C.fmtClock(left);
       var ring = $('#breakRing');
       if (ring) ring.style.strokeDashoffset = String(565.5 * (1 - Math.max(0, left) / (C.BREAK_MINUTES * 60000)));
-      if (left <= 0 && !busy) { busy = true; try { enterStage('m1'); } finally { busy = false; } toast('Break is over. Math Module 1 has started.', 'info', 5000); }
+      if (left <= 0 && !busy) { busy = true; try { stopBreakMusic(); enterStage('m1'); } finally { busy = false; } toast('Break is over. Math Module 1 has started.', 'info', 5000); }
       return;
     }
     var m = curMod();
@@ -404,12 +455,11 @@
     var name = (S.student && S.student.name) || Store.get('isatprep:name') || '';
     var tg = (S.student && S.student.telegram) || Store.get('isatprep:tg') || '';
     var closes = T.closesAt ? '<div class="pill soft">' + I.clock + ' Open until ' + esc(fmtDateTime(T.closesAt)) + '</div>' : '';
-    var steps = [
-      ['Reading &amp; Writing', 'Module 1', '27 questions · 32 min'],
-      ['Reading &amp; Writing', 'Module 2', '27 questions · 32 min'],
-      ['Break', '10 minutes', 'Stretch, drink water'],
-      ['Math', 'Module 1', '22 questions · 35 min'],
-      ['Math', 'Module 2', '22 questions · 35 min']
+    var rules = [
+      [I.shield, 'Use your real name and Telegram username', 'That’s how your result is matched to you in the results list.'],
+      [I.lock, 'No cheating, no AI', 'The test runs in full screen and hides itself if you leave it. Every exit is recorded.'],
+      [I.clock, 'A module can’t be paused', 'Once a module starts, its timer keeps running. Between modules you can <b>Save and exit</b> and come back later on the same device.'],
+      [I.send, 'Share your result', 'Post your score in the channel when you finish.']
     ];
     $app.innerHTML = brandBar(PREVIEW ? '<span class="pill warn">Preview mode — nothing is saved</span>' : '') +
       '<main class="welcome">' +
@@ -417,45 +467,38 @@
         '<div class="hero-copy">' +
           '<div class="eyebrow">' + I.spark + ' Daily SAT Mock</div>' +
           '<h1>' + esc(T.title) + '</h1>' +
-          '<p class="lede">A full-length, adaptive Digital SAT practice test. The format and timing match the real exam, and you get an estimated score with explanations at the end.</p>' +
-          '<div class="facts">' +
-            '<div class="fact"><b>98</b><span>questions</span></div>' +
-            '<div class="fact"><b>2h 14m</b><span>+ 10 min break</span></div>' +
-            '<div class="fact"><b>4</b><span>modules</span></div>' +
-            '<div class="fact"><b>400–1600</b><span>score scale</span></div>' +
-          '</div>' + closes +
+          '<div class="chips"><span>' + I.book + ' 98 questions</span><span>' + I.clock + ' 2h 14m + 10 min break</span><span>' + I.route + ' Adaptive, like the real SAT</span></div>' + closes +
+          '<div class="rules-card"><h2>Before you start</h2><ol class="rule-list">' + rules.map(function (r, i) {
+            return '<li><span class="rl-ico">' + r[0] + '</span><div><b>' + (i + 1) + '. ' + r[1] + '</b><p>' + r[2] + '</p></div></li>';
+          }).join('') + '</ol></div>' +
         '</div>' +
         '<form class="start-card" id="startForm" novalidate autocomplete="on">' +
-          '<h2>Ready? Tell us who’s testing</h2>' +
+          '<h2>Who’s testing?</h2>' +
           '<label class="field"><span>Full name</span><input id="fName" name="name" type="text" maxlength="40" autocomplete="name" placeholder="e.g. Aziza Karimova" value="' + esc(name) + '" required></label>' +
-          '<label class="field"><span>Telegram username <em>(optional)</em></span><div class="at-input"><b>@</b><input id="fTg" name="telegram" type="text" maxlength="33" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="username" value="' + esc(tg) + '"></div></label>' +
+          '<label class="field"><span>Telegram username</span><div class="at-input"><b>@</b><input id="fTg" name="telegram" type="text" maxlength="33" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="username" value="' + esc(tg) + '" required></div></label>' +
+          '<label class="agree"><input type="checkbox" id="fAgree"><span>I’ve read the rules and I’ll follow them.</span></label>' +
           '<p class="field-err" id="fErr" hidden></p>' +
           '<button class="btn primary big block" id="startBtn" type="submit" disabled><span class="spin" aria-hidden="true"></span><span class="lbl">Preparing test…</span></button>' +
-          '<p class="fine">' + I.laptop + '<span>Best on a laptop. On a phone, open the link in <b>Chrome</b> or <b>Safari</b>.</span></p>' +
+          '<p class="fine">' + I.laptop + '<span>' + (FS_OK ? 'The test opens in <b>full screen</b>. Pick a time when you can focus for about 2.5 hours.' : 'Best on a laptop. On a phone, open the link in <b>Chrome</b> or <b>Safari</b>.') + '</span></p>' +
           (Store.ok || PREVIEW ? '' : '<p class="fine warn-text">' + I.info + '<span>Your browser is blocking storage (private mode?). The test works, but refreshing the page would lose your progress.</span></p>') +
         '</form>' +
       '</section>' +
-      '<section class="timeline" aria-label="Test structure">' + steps.map(function (s, i) {
-        return '<div class="tl-step' + (i === 2 ? ' brk' : '') + '"><div class="tl-dot">' + (i === 2 ? I.coffee : (i < 2 ? I.book : I.sigma)) + '</div><div class="tl-txt"><b>' + s[0] + '</b><span>' + s[1] + '</span><small>' + s[2] + '</small></div></div>';
-      }).join('') + '</section>' +
-      '<section class="rules">' +
-        rule(I.shield, 'One attempt', 'Once you start, you can’t restart. Reopening the link takes you back to where you left off.') +
-        rule(I.clock, 'Real timing', 'Each module has its own timer. It keeps running if you close the page, and your answers are saved after every click.') +
-        rule(I.route, 'Adaptive Module 2', 'Module 2 is easier or harder depending on how you did in Module 1. Do your best from the start!') +
-        rule(I.bookmark, 'Same tools as test day', 'Mark questions for review, cross out answer choices, and in Math use the Desmos calculator and the reference sheet.') +
-      '</section>' +
       '<footer class="foot">Unofficial practice test. SAT® is a trademark of College Board, which is not affiliated with this site.</footer>' +
       '</main>';
-    var form = $('#startForm'), btn = $('#startBtn'), nameIn = $('#fName'), tgIn = $('#fTg'), err = $('#fErr');
+    var form = $('#startForm'), btn = $('#startBtn'), nameIn = $('#fName'), tgIn = $('#fTg'), err = $('#fErr'), agree = $('#fAgree');
     var ready = false;
     function validName() { return nameIn.value.trim().replace(/\s+/g, ' ').length >= 2; }
-    function paint() { btn.disabled = !ready || !validName(); if (ready) btn.querySelector('.lbl').textContent = 'Start the test'; btn.classList.toggle('loading', !ready); }
-    nameIn.addEventListener('input', function () { err.hidden = true; paint(); });
-    tgIn.addEventListener('input', function () { var v = tgIn.value.replace(/^@+/, '').replace(/[^A-Za-z0-9_]/g, ''); if (v !== tgIn.value) tgIn.value = v; });
+    function validTg() { return /^[A-Za-z0-9_]{4,32}$/.test(tgIn.value.trim()); }
+    function paint() { btn.disabled = !ready; if (ready) btn.querySelector('.lbl').textContent = 'Start the test'; btn.classList.toggle('loading', !ready); }
+    nameIn.addEventListener('input', function () { err.hidden = true; });
+    agree.addEventListener('change', function () { err.hidden = true; });
+    tgIn.addEventListener('input', function () { err.hidden = true; var v = tgIn.value.replace(/^@+/, '').replace(/[^A-Za-z0-9_]/g, ''); if (v !== tgIn.value) tgIn.value = v; });
     form.addEventListener('submit', function (e) {
       e.preventDefault();
       if (!ready) return;
-      if (!validName()) { err.textContent = 'Please enter your name (at least 2 letters).'; err.hidden = false; nameIn.focus(); return; }
+      if (!validName()) { err.textContent = 'Please enter your real name (at least 2 letters).'; err.hidden = false; nameIn.focus(); return; }
+      if (!validTg()) { err.textContent = 'Please enter your Telegram username (at least 4 letters, numbers or _).'; err.hidden = false; tgIn.focus(); return; }
+      if (!agree.checked) { err.textContent = 'Please read the rules and tick the box.'; err.hidden = false; agree.focus(); return; }
       var nm = nameIn.value.trim().replace(/\s+/g, ' ').slice(0, 40), t = tgIn.value.trim().slice(0, 32);
       Store.set('isatprep:name', nm); Store.set('isatprep:tg', t);
       confirmStart(nm, t);
@@ -463,13 +506,13 @@
     preloadAssets(function () { ready = true; paint(); });
     paint();
   }
-  function rule(icon, title, text) { return '<div class="rule"><div class="rule-ico">' + icon + '</div><div><b>' + title + '</b><p>' + text + '</p></div></div>'; }
-
+  
   function confirmStart(nm, tg) {
     modal({
       title: 'Start ' + esc(T.title) + '?',
       body: '<p>Hi <b>' + esc(nm) + '</b>! The first module, <b>Reading &amp; Writing · Module 1</b>, starts as soon as you tap <b>Begin</b>. It runs for 32 minutes.</p>' +
-        '<ul class="checks"><li>Find a quiet place where you can focus for about 2.5 hours.</li><li>Keep scratch paper and a pencil nearby for Math.</li><li>You get one attempt — no restarts.</li></ul>',
+        '<ul class="checks">' + (FS_OK ? '<li>The test switches to <b>full screen</b>. If you leave full screen, the questions are hidden (the timer keeps running).</li>' : '') +
+        '<li>Keep scratch paper and a pencil nearby for Math.</li><li>You get one attempt — no restarts.</li></ul>',
       actions: [{ label: 'Not yet', action: 'layer-close' }, { label: 'Begin', action: 'begin', kind: 'primary', auto: true }],
       cls: 'narrow'
     });
@@ -847,9 +890,160 @@
         '<h1>Nice work — Reading &amp; Writing is done!</h1>' +
         '<p class="lede">Take a short break. Stand up, stretch, and drink some water. When the timer reaches 0:00, <b>Math</b> starts automatically.</p>' +
         '<div class="next-up"><div>' + I.sigma + '</div><div><b>Up next: Math</b><span>2 modules · 22 questions each · 35 minutes each. The Desmos calculator and the reference sheet are available.</span></div></div>' +
-        '<button class="btn primary big" data-action="resume">Resume testing now ' + I.chevRight + '</button>' +
+        '<div class="brk-actions"><button class="btn primary big" data-action="resume">Resume testing now ' + I.chevRight + '</button>' +
+        '<button class="btn ghost big" data-action="save-exit">Save and exit</button></div>' +
+        '<div class="music"><div class="music-row"><button class="music-btn' + (Music.on ? ' on' : '') + '" id="musicBtn" data-action="music" aria-pressed="' + (Music.on ? 'true' : 'false') + '">' +
+          '<span class="eq" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span class="lbl">' + (Music.on ? 'Stop the beat' : 'isatprep phonk beat') + '</span></button>' +
+          (CFG.breakMusicYoutube ? '<button class="music-btn" id="ytBtn" data-action="music-yt" aria-pressed="false"><span class="eq" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span class="lbl">' + esc(CFG.breakMusicYoutubeLabel || 'Phonk mix (YouTube)') + '</span></button>' : '') +
+          '</div><div class="yt-box" id="ytBox" hidden></div><small>Optional · plays only during the break</small></div>' +
       '</div></main>';
   }
+
+  /* =================================================================== screen: between modules (gate) */
+  function screenGate() {
+    var st = S.gate, info = C.STAGE_INFO[st], n = questionsFor(st).length;
+    var done = st === 'rw2' ? 'Reading and Writing Module 1 is done' : st === 'm1' ? 'Reading and Writing is done' : 'Math Module 1 is done';
+    var nextUp = '<div class="next-up"><div>' + (info.section === 'math' ? I.sigma : I.book) + '</div><div><b>Up next: ' + esc(info.title) + '</b><span>' +
+      n + ' questions · ' + info.minutes + ' minutes. The timer starts only when you press Start.</span></div></div>';
+    $app.className = 'app page break-page';
+    $app.innerHTML = (PREVIEW ? previewBar() : '') + brandBar() +
+      '<main class="break-screen"><div class="break-card gate-card">' +
+        (S.exited
+          ? '<div class="gate-ico ok">' + I.check + '</div><h1>Your progress is saved</h1>' +
+            '<p class="lede">You can close this page now. When you’re ready, open <b>the same link on this same device and browser</b> and you’ll be right back here.</p>' + nextUp +
+            '<div class="brk-actions"><button class="btn primary big" data-action="gate-start">Start ' + esc(info.short) + ' now ' + I.chevRight + '</button></div>'
+          : '<div class="gate-ico">' + I.check + '</div><h1>' + done + '!</h1>' +
+            '<p class="lede">Need a pause? This is the moment: <b>Save and exit</b> now and finish later. Once a module starts, it can’t be paused.</p>' + nextUp +
+            '<div class="brk-actions"><button class="btn primary big" data-action="gate-start">Start ' + esc(info.short) + ' ' + I.chevRight + '</button>' +
+            '<button class="btn ghost big" data-action="save-exit">Save and exit</button></div>') +
+      '</div></main>';
+  }
+
+  /* =================================================================== full-screen lock */
+  var lockWas = null;
+  function lockNeeded() { return FS_OK && S && S.status === 'testing' && !S.gate && S.stage && S.stage !== 'break'; }
+  function paintLock() {
+    var need = lockNeeded(), locked = need && !isFullscreen();
+    var el = document.getElementById('fsLock');
+    if (locked && !el) {
+      el = document.createElement('div');
+      el.id = 'fsLock'; el.className = 'fs-lock'; el.setAttribute('role', 'dialog'); el.setAttribute('aria-modal', 'true');
+      el.innerHTML = '<div class="fs-card"><div class="gate-ico warn">' + I.lock + '</div><h2>Full screen is required</h2>' +
+        '<p>The questions are hidden while you’re outside full screen. <b>Your timer keeps running</b>, so come back quickly.</p>' +
+        '<button class="btn primary big" data-action="fs-enter">Return to full screen</button><small>Each exit is recorded with your result.</small></div>';
+      document.body.appendChild(el);
+    }
+    if (el) el.hidden = !locked;
+    if (lockWas === false && locked && S.integrity) { S.integrity.fsExits = (S.integrity.fsExits || 0) + 1; save(); }
+    lockWas = need ? locked : null;
+  }
+  document.addEventListener('fullscreenchange', paintLock);
+  document.addEventListener('webkitfullscreenchange', paintLock);
+  window.addEventListener('resize', function () { if (S) paintLock(); });
+
+  /* =================================================================== break music (optional) */
+  // An original phonk-style loop made live with the Web Audio API (cowbell riff, 808 bass, drums), so there is
+  // nothing to download and no licensing issue. Set SAT_CONFIG.breakMusicUrl to play your own track instead.
+  var Music = { on: false, ctx: null, timer: null, step: 0, next: 0, audio: null, master: null };
+  function startBreakMusic() {
+    if (Music.on) return;
+    if (CFG.breakMusicUrl) {
+      Music.audio = Music.audio || new Audio(CFG.breakMusicUrl);
+      Music.audio.loop = true; Music.audio.volume = 0.6;
+      var p = Music.audio.play(); if (p && p.catch) p.catch(function () { });
+      Music.on = true; return paintMusic();
+    }
+    var AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) { toast('Music isn’t supported in this browser.', 'info'); return; }
+    if (!Music.ctx) {
+      Music.ctx = new AC();
+      Music.master = Music.ctx.createGain(); Music.master.gain.value = 0.32;
+      var comp = Music.ctx.createDynamicsCompressor(); Music.master.connect(comp); comp.connect(Music.ctx.destination);
+      var len = Music.ctx.sampleRate, buf = Music.ctx.createBuffer(1, len, Music.ctx.sampleRate), dd = buf.getChannelData(0);
+      for (var i = 0; i < len; i++) dd[i] = Math.random() * 2 - 1;
+      Music.noise = buf;
+      var curve = new Float32Array(256); for (var k = 0; k < 256; k++) { var x = k / 128 - 1; curve[k] = Math.tanh(3 * x); }
+      Music.curve = curve;
+    }
+    if (Music.ctx.state === 'suspended') Music.ctx.resume();
+    Music.on = true; Music.step = 0; Music.next = Music.ctx.currentTime + 0.08;
+    Music.timer = setInterval(schedMusic, 25);
+    paintMusic();
+  }
+  function stopBreakMusic() {
+    if (!Music.on) return;
+    Music.on = false;
+    clearInterval(Music.timer); Music.timer = null;
+    if (Music.audio) try { Music.audio.pause(); } catch (e) { }
+    if (Music.ctx) try { Music.ctx.suspend(); } catch (e) { }
+    paintMusic();
+  }
+  function paintMusic() {
+    var b = $('#musicBtn'); if (!b) return;
+    b.classList.toggle('on', Music.on); b.setAttribute('aria-pressed', Music.on ? 'true' : 'false');
+    b.querySelector('.lbl').textContent = Music.on ? 'Stop the beat' : 'isatprep phonk beat';
+  }
+  // A YouTube mix (SAT_CONFIG.breakMusicYoutube = video id), played through YouTube's own embedded player.
+  function toggleYoutube() {
+    var box = $('#ytBox'), btn = $('#ytBtn'); if (!box || !btn) return;
+    var on = !box.hidden;
+    if (on) { box.innerHTML = ''; box.hidden = true; }
+    else {
+      stopBreakMusic();
+      box.innerHTML = '<iframe src="https://www.youtube-nocookie.com/embed/' + encodeURIComponent(CFG.breakMusicYoutube) + '?autoplay=1&rel=0&playsinline=1" title="Break music" ' +
+        'allow="autoplay; encrypted-media; picture-in-picture" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>';
+      box.hidden = false;
+    }
+    btn.classList.toggle('on', !on); btn.setAttribute('aria-pressed', !on ? 'true' : 'false');
+    btn.querySelector('.lbl').textContent = !on ? 'Stop the mix' : (CFG.breakMusicYoutubeLabel || 'Phonk mix (YouTube)');
+  }
+  function stopYoutube() { var box = $('#ytBox'); if (box && !box.hidden) toggleYoutube(); }
+  var PH = {
+    bpm: 132,
+    // 32 sixteenth-steps (2 bars). Cowbell riff in semitones above the root (null = rest).
+    bell: [0, null, 0, null, 3, null, 0, null, 7, null, 5, null, 3, null, 0, null, 0, null, 0, null, 3, null, 5, null, 8, null, 7, null, 5, null, 3, null],
+    bass: [0, null, null, null, null, null, null, 0, null, null, 0, null, null, null, null, null, -2, null, null, null, null, null, null, -2, null, null, -4, null, null, null, null, null],
+    kick: [1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0],
+    clap: [0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0],
+    hat:  [1, 0, 1, 0, 1, 0, 1, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0]
+  };
+  function schedMusic() {
+    var c = Music.ctx, dt = 60 / PH.bpm / 4;
+    while (Music.next < c.currentTime + 0.12) {
+      var i = Music.step % 32, t = Music.next;
+      if (PH.bell[i] !== null) cowbell(t, PH.bell[i]);
+      if (PH.bass[i] !== null) bass808(t, PH.bass[i], dt * 6);
+      if (PH.kick[i]) kick(t);
+      if (PH.clap[i]) clap(t);
+      if (PH.hat[i]) hat(t, i % 2 ? 0.05 : 0.09);
+      Music.step++; Music.next += dt;
+    }
+  }
+  function env(g, t, peak, dur) { g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(peak, t + 0.004); g.gain.exponentialRampToValueAtTime(0.0001, t + dur); }
+  function cowbell(t, semi) {
+    var c = Music.ctx, r = Math.pow(2, semi / 12), g = c.createGain(), bp = c.createBiquadFilter();
+    bp.type = 'bandpass'; bp.frequency.value = 900 * r; bp.Q.value = 2.5;
+    [540, 800].forEach(function (f) { var o = c.createOscillator(); o.type = 'square'; o.frequency.value = f * r; o.connect(bp); o.start(t); o.stop(t + 0.32); });
+    bp.connect(g); g.connect(Music.master); env(g, t, 0.28, 0.3);
+  }
+  function bass808(t, semi, dur) {
+    var c = Music.ctx, o = c.createOscillator(), g = c.createGain(), sh = c.createWaveShaper(), f = 43.65 * Math.pow(2, semi / 12);
+    sh.curve = Music.curve; o.type = 'sine';
+    o.frequency.setValueAtTime(f * 2.2, t); o.frequency.exponentialRampToValueAtTime(f, t + 0.06);
+    o.connect(sh); sh.connect(g); g.connect(Music.master); env(g, t, 0.55, dur); o.start(t); o.stop(t + dur + 0.05);
+  }
+  function kick(t) {
+    var c = Music.ctx, o = c.createOscillator(), g = c.createGain();
+    o.frequency.setValueAtTime(150, t); o.frequency.exponentialRampToValueAtTime(45, t + 0.12);
+    o.connect(g); g.connect(Music.master); env(g, t, 0.9, 0.22); o.start(t); o.stop(t + 0.25);
+  }
+  function noiseHit(t, type, freq, peak, dur) {
+    var c = Music.ctx, n = c.createBufferSource(), f = c.createBiquadFilter(), g = c.createGain();
+    n.buffer = Music.noise; f.type = type; f.frequency.value = freq;
+    n.connect(f); f.connect(g); g.connect(Music.master); env(g, t, peak, dur); n.start(t, Math.random() * 0.5); n.stop(t + dur + 0.02);
+  }
+  function clap(t) { noiseHit(t, 'bandpass', 1500, 0.5, 0.16); noiseHit(t + 0.012, 'bandpass', 1200, 0.35, 0.12); }
+  function hat(t, peak) { noiseHit(t, 'highpass', 7500, peak, 0.04); }
 
   /* =================================================================== screen: results */
   function screenResults(fresh) {
@@ -989,7 +1183,8 @@
       startedAt: new Date(S.startedAt).toISOString(), finishedAt: new Date(S.finishedAt).toISOString(),
       total: r.total, rwScore: r.rw, mathScore: r.math, rwRoute: r.routes.rw, mathRoute: r.routes.math,
       rw1: r.mods.rw1.correct, rw2: r.mods.rw2.correct, m1: r.mods.m1.correct, m2: r.mods.m2.correct,
-      minutesUsed: Math.round(r.usedMs / 60000), device: isNarrow() ? 'mobile' : 'desktop', userAgent: navigator.userAgent.slice(0, 180), answers: ans
+      minutesUsed: Math.round(r.usedMs / 60000), device: isNarrow() ? 'mobile' : 'desktop', userAgent: navigator.userAgent.slice(0, 180), answers: ans,
+      fsExits: FS_OK ? (S.integrity && S.integrity.fsExits) || 0 : 'n/a (phone)', saveExits: (S.integrity && S.integrity.saveExits) || 0
     };
   }
   function trySubmit() {
@@ -1038,6 +1233,7 @@
   function previewJump(idx) {
     var opts = [['rw1', ''], ['rw2', 'easy'], ['rw2', 'hard'], ['m1', ''], ['m2', 'easy'], ['m2', 'hard'], ['break', ''], ['done', '']];
     var o = opts[idx]; if (!o) return;
+    S.gate = null; S.exited = false; stopBreakMusic(); closeLayer();
     if (!S.student) S.student = { name: 'Preview', telegram: '' };
     S.status = 'testing'; S.startedAt = S.startedAt || now();
     if (o[0] === 'rw2') S.routes.rw = o[1];
@@ -1057,11 +1253,16 @@
     var t = e.target.closest ? e.target.closest('[data-action]') : null;
     if (!t || t.disabled) return;
     var act = t.getAttribute('data-action');
-    var m = S && S.status === 'testing' && S.stage !== 'break' ? curMod() : null;
+    var m = S && S.status === 'testing' && S.stage !== 'break' && !S.gate ? curMod() : null;
     switch (act) {
       case 'noop': e.preventDefault(); break;
       case 'layer-close': closeLayer(); break;
-      case 'begin': if (pendingStart) { var p = pendingStart; pendingStart = null; closeLayer(); startTest(p.name, p.telegram); } break;
+      case 'begin': if (pendingStart) { var p = pendingStart; pendingStart = null; enterFullscreen(); closeLayer(); startTest(p.name, p.telegram); } break;
+      case 'gate-start': startFromGate(); break;
+      case 'save-exit': saveAndExit(); break;
+      case 'fs-enter': enterFullscreen(); setTimeout(paintLock, 400); break;
+      case 'music': if (Music.on) stopBreakMusic(); else { stopYoutube(); startBreakMusic(); } break;
+      case 'music-yt': toggleYoutube(); break;
       case 'choose': if (m) choose(t.getAttribute('data-letter')); break;
       case 'strike': if (m) strike(t.getAttribute('data-letter')); break;
       case 'mark': if (m) toggleMark(); break;
@@ -1078,7 +1279,7 @@
       case 'calc-retry': retryDesmos(); break;
       case 'toggle-timer': S.ui.timerHidden = !S.ui.timerHidden; save(); paintTimerVisibility(); break;
       case 'spr-key': insertSprKey(t.getAttribute('data-key')); break;
-      case 'resume': if (S.stage === 'break' && !busy) { busy = true; try { enterStage('m1'); } finally { busy = false; } } break;
+      case 'resume': if (S.stage === 'break' && !S.gate && !busy) { enterFullscreen(); stopBreakMusic(); busy = true; try { enterStage('m1'); } finally { busy = false; } } break;
       case 'res-tab': S.ui.resTab = t.getAttribute('data-tab'); save(); $$('.tab').forEach(function (b) { var on = b.getAttribute('data-tab') === S.ui.resTab; b.classList.toggle('on', on); b.setAttribute('aria-selected', on); }); $('#resList').innerHTML = resultList(S.ui.resTab); break;
       case 'res-open': openResultQuestion(t.getAttribute('data-st'), +t.getAttribute('data-i')); break;
       case 'res-prev': if (resCursor && resCursor.i > 0) openResultQuestion(resCursor.st, resCursor.i - 1); break;
@@ -1096,11 +1297,11 @@
     if (ch && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); choose(ch.getAttribute('data-letter')); }
   });
   window.addEventListener('beforeunload', function (e) {
-    if (!PREVIEW && S && S.status === 'testing') { save(); e.preventDefault(); e.returnValue = ''; return ''; }
+    if (!PREVIEW && S && S.status === 'testing' && !S.gate) { save(); e.preventDefault(); e.returnValue = ''; return ''; }
   });
   window.addEventListener('pagehide', function () { save(); });
   window.addEventListener('popstate', function () {
-    if (S && S.status === 'testing' && !PREVIEW) {
+    if (S && S.status === 'testing' && !S.gate && !PREVIEW) {
       try { history.pushState({ isat: 1 }, ''); } catch (e) { }
       toast('Use the Back and Next buttons at the bottom to move between questions.', 'info', 4000);
     }

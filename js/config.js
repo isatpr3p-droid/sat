@@ -13,6 +13,10 @@ window.SAT_CONFIG = {
   // Desmos graphing calculator API key (isatprep's own key from Desmos).
   desmosKey: 'bb33e0cf722d4c86a5648b4b5dd872ff',
 
+  // Optional break music from YouTube (played in YouTube's embedded player). Video id after watch?v=  — '' to hide.
+  breakMusicYoutube: 'ZZ1FsZt9yUg',
+  breakMusicYoutubeLabel: 'Viral phonk mix · YouTube',
+
   // Time zone used to show opening/closing times (IANA name).
   timeZone: 'Asia/Tashkent',
 
