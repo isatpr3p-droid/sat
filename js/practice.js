@@ -53,6 +53,14 @@
       del: function (k) { delete mem[k]; try { if (ok) localStorage.removeItem(k); } catch (e) { } }
     };
   })();
+  // Night mode: remembered per device; the first visit follows the phone/laptop setting.
+  function theme() { var t = Store.get('isatprep:theme'); if (t === 'dark' || t === 'light') return t; try { return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; } catch (e) { return 'light'; } }
+  function applyTheme() { var t = theme(); document.documentElement.setAttribute('data-theme', t); var m = document.querySelector('meta[name="theme-color"]'); if (m) m.setAttribute('content', t === 'dark' ? '#0f131c' : '#ffffff'); }
+  function toggleTheme() {
+    Store.set('isatprep:theme', theme() === 'dark' ? 'light' : 'dark'); applyTheme();
+    $$('[data-action="theme"]').forEach(function (b) { var d = theme() === 'dark'; b.innerHTML = (d ? I.sun : I.moon) + '<span>' + (d ? 'Light' : 'Night') + '</span>'; b.setAttribute('aria-label', d ? 'Switch to light mode' : 'Switch to night mode'); });
+  }
+  function themeBtn(cls) { var d = theme() === 'dark'; return '<button class="' + cls + '" data-action="theme" aria-label="' + (d ? 'Switch to light mode' : 'Switch to night mode') + '">' + (d ? I.sun : I.moon) + '<span>' + (d ? 'Light' : 'Night') + '</span></button>'; }
   function deviceId() { var id = Store.get('isatprep:device'); if (!id) { id = 'd-' + uid(14); Store.set('isatprep:device', id); } return id; }
   var KB = (function () { var a = []; for (var i = 0; i < KHEX.length; i += 2) a.push(parseInt(KHEX.substr(i, 2), 16)); return a; })();
   var keyCache = {};
@@ -82,6 +90,8 @@
     ref: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3.5h10l4 4v13H5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M8 11h8M8 14.5h8M8 18h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M14.5 3.5v4.5h4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>',
     chevLeft: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
     chevRight: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    moon: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/></svg>',
+    sun: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.9"/><path d="M12 2.5v2.2M12 19.3v2.2M4.6 4.6l1.6 1.6M17.8 17.8l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.6 19.4l1.6-1.6M17.8 6.2l1.6-1.6" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>',
     chevUp: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 15l6-6 6 6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
     chevDown: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
     close: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>',
@@ -226,7 +236,7 @@
         '<p class="fine">' + I.laptop + '<span>Works on laptops and phones. Your progress is saved on this device.</span></p>' +
         '</form>';
     }
-    $app.innerHTML = '<header class="brandbar"><a class="wordmark" href="practice.html">' + wordmark() + '</a></header>' +
+    $app.innerHTML = '<header class="brandbar"><a class="wordmark" href="practice.html">' + wordmark() + '</a>' + themeBtn('theme-pill') + '</header>' +
       '<main class="welcome">' +
       '<section class="hero">' +
         '<div class="hero-copy">' +
@@ -289,7 +299,7 @@
           '<button class="tool mode-tool" data-action="mode" title="Switch mode">' + (P.mode === 'rush' ? I.bolt : I.leaf) + '<span>' + (P.mode === 'rush' ? 'Rush' : 'Untimed') + '</span></button>' +
           (sec === 'math' ? '<button class="tool" data-action="calc" aria-pressed="' + (P.ui.calcOpen ? 'true' : 'false') + '">' + I.calc + '<span><b class="full">Calculator</b><b class="short">Calc</b></span></button><button class="tool" data-action="reference">' + I.ref + '<span><b class="full">Reference</b><b class="short">Ref</b></span></button>' : '') +
           '<button class="tool" data-action="tutor" aria-pressed="false">' + I.bot + '<span><b class="full">AI tutor</b><b class="short">Tutor</b></span></button>' +
-          '<button class="tool" data-action="report">' + I.chart + '<span>Report</span></button>' +
+          '<button class="tool" data-action="report">' + I.chart + '<span>Report</span></button>' + themeBtn('tool theme-tool') +
         '</div>' +
       '</header>' +
       '<div class="tb-rule" aria-hidden="true"></div>' +
@@ -324,16 +334,13 @@
     var skills = []; all.forEach(function (q) { if (skills.indexOf(q.sk) < 0) skills.push(q.sk); });
     var d = doneCount(sec);
     el.innerHTML =
-      '<div class="qm-head"><div><b>' + SEC[sec].name + '</b><small>' + d + ' / ' + all.length + ' done · ' + pct(correctCount(sec), d) + '% correct</small></div>' +
+      '<div class="qm-head"><b class="qm-title">' + SEC[sec].short + ' Questions</b>' +
+        '<label class="qm-pill">' + I.filter + '<select id="fSt" aria-label="Show">' + [['all', 'All questions'], ['new', 'Not tried yet'], ['wrong', 'My mistakes'], ['marked', 'For review'], ['right', 'Correct']].map(function (o) { return '<option value="' + o[0] + '"' + (P.f.st === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></label>' +
         '<button class="icon-btn qm-close" data-action="panel" aria-label="Close question map">' + I.close + '</button></div>' +
-      '<div class="qm-prog"><i style="width:' + pct(d, all.length) + '%"></i></div>' +
-      '<div class="qm-filters">' +
-        '<div class="dchips">' + ['E', 'M', 'H'].map(function (k) { return '<button class="dchip ' + k.toLowerCase() + (P.f.d[k] ? ' on' : '') + '" data-action="fd" data-d="' + k + '" aria-pressed="' + !!P.f.d[k] + '"><i></i>' + DIFF[k] + '</button>'; }).join('') + '</div>' +
-        '<div class="frow"><select id="fSt" aria-label="Show">' + [['all', 'All questions'], ['new', 'Not tried yet'], ['wrong', 'My mistakes'], ['marked', 'Marked for review'], ['right', 'Correct']].map(function (o) { return '<option value="' + o[0] + '"' + (P.f.st === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select>' +
-        '<select id="fSk" aria-label="Skill"><option value="">All skills</option>' + skills.map(function (s) { return '<option' + (P.f.sk === s ? ' selected' : '') + '>' + esc(s) + '</option>'; }).join('') + '</select></div>' +
-      '</div>' +
-      '<div class="qm-legend"><span><i class="lg-b">' + BADGE.ok + '</i>Correct</span><span><i class="lg-b">' + BADGE.bad + '</i>Wrong</span><span><i class="lg-b">' + BADGE.okr + '</i>Correct, not on the 1st try</span>' + (P.mode === 'rush' || hasTimeouts() ? '<span><i class="lg-b">' + BADGE.to + '</i>Timed out</span>' : '') +
-        '<span class="lg-d"><i class="dd e"></i><i class="dd m"></i><i class="dd h"></i>Strip = difficulty</span></div>' +
+      '<div class="qm-filters"><div class="dchips">' + ['E', 'M', 'H'].map(function (k) { return '<button class="dchip ' + k.toLowerCase() + (P.f.d[k] ? ' on' : '') + '" data-action="fd" data-d="' + k + '" aria-pressed="' + !!P.f.d[k] + '">' + DIFF[k] + '</button>'; }).join('') + '</div>' +
+        '<select id="fSk" class="qm-skill" aria-label="Skill"><option value="">All skills</option>' + skills.map(function (s) { return '<option' + (P.f.sk === s ? ' selected' : '') + '>' + esc(s) + '</option>'; }).join('') + '</select></div>' +
+      '<div class="qm-legend"><span><i class="lg-b">' + BADGE.ok + '</i>Correct</span><span><i class="lg-b">' + BADGE.bad + '</i>Incorrect</span><span><i class="lg-f">' + I.bookmarkOn + '</i>For Review</span><span><i class="lg-b">' + BADGE.okr + '</i>Correct (incorrect attempts)</span>' +
+        (P.mode === 'rush' || hasTimeouts() ? '<span><i class="lg-b">' + BADGE.to + '</i>Timed out</span>' : '') + '<span class="qm-done">' + d + '/' + all.length + ' done · ' + pct(correctCount(sec), d) + '% correct</span></div>' +
       (list.length ? '<div class="tiles">' + list.map(function (q) {
         var s = status(sec, q.n), r = P.at[sec + ':' + q.n];
         return '<button class="tile d' + q.d + (s ? ' s-' + s : '') + (q.n === P.cur[sec] ? ' cur' : '') + '" data-action="goto" data-n="' + q.n + '" title="' + DIFF[q.d] + ' · ' + esc(q.sk) + '" aria-label="Question ' + q.n + ', ' + DIFF[q.d] + (s ? ', ' + statusWord(s) : ', not tried') + '">' + q.n +
@@ -498,8 +505,7 @@
     var t = $('.tile[data-n="' + n + '"]'); if (!t) return;
     var sec = P.sec, s = status(sec, n);
     t.className = t.className.replace(/\bs-\w+/g, '').trim() + (s ? ' s-' + s : '');
-    var head = $('.qm-head small'); if (head) { var d = doneCount(sec); head.textContent = d + ' / ' + qs(sec).length + ' done · ' + pct(correctCount(sec), d) + '% correct'; }
-    var bar = $('.qm-prog i'); if (bar) bar.style.width = pct(doneCount(sec), qs(sec).length) + '%';
+
   }
   function choose(L) {
     var sec = P.sec, q = curQ(), r = rec(sec, q.n, false) || {};
@@ -636,7 +642,7 @@
     var rep = reportSec;
     var A = rep === 'rw' ? R : M;
     $app.className = 'app page';
-    $app.innerHTML = '<header class="brandbar"><a class="wordmark" href="practice.html">' + wordmark() + '</a><div class="rb-actions"><button class="btn ghost" data-action="go">' + I.chevLeft + ' Back to practice</button></div></header>' +
+    $app.innerHTML = '<header class="brandbar"><a class="wordmark" href="practice.html">' + wordmark() + '</a><div class="rb-actions">' + themeBtn('theme-pill') + '<button class="btn ghost" data-action="go">' + I.chevLeft + ' Back to practice</button></div></header>' +
       '<main class="results report">' +
       '<section class="score-hero rep-hero"><div><div class="eyebrow light">' + I.chart + ' My report</div><h1>' + esc(name.split(' ')[0] || 'Your') + '’s progress</h1>' +
         '<p>' + done + ' of 355 questions done · <b>' + pct(ok, done) + '%</b> correct on the first try · ' + fmtLong(R.ms + M.ms) + ' practiced · best streak ' + P.best + '.</p>' +
@@ -903,6 +909,7 @@
     var a = t.getAttribute('data-action');
     switch (a) {
       case 'layer-close': closeLayer(); break;
+      case 'theme': toggleTheme(); break;
       case 'go': closeLayer(); if (!P.user) return screenWelcome(); startPractice(); break;
       case 'home': e.preventDefault(); goHome(); break;
       case 'switch-user': e.preventDefault(); modal({ title: 'Switch student?', cls: 'narrow', body: '<p>This clears <b>' + esc(P.user.name) + '</b>’s progress from this device so someone else can start. Progress already sent to the sheet stays there.</p>', actions: [{ label: 'Cancel', action: 'layer-close' }, { label: 'Clear and switch', action: 'switch-confirm', kind: 'primary' }] }); break;
@@ -969,6 +976,7 @@
 
 
   /* =================================================================== boot */
+  applyTheme();
   P = load();
   if (P.user) screenWelcome(); else screenWelcome();
 })();
