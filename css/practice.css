@@ -62,13 +62,16 @@ ol.roman li { margin: 6px 0; padding-left: 4px; }
 .mode-tool svg { color: var(--ok) !important; }
 .app.rush .mode-tool svg { color: #c2410c !important; }
 
-/* question map (left panel) */
-.qmap { display: none; width: 300px; flex: none; border-right: 1px solid var(--line); background: #fbfbfd; flex-direction: column; min-height: 0; overflow: hidden; }
-.panel-open .qmap { display: flex; }
+/* question map: pop-up above the bottom bar (closed by default) */
+.qmap { display: none; position: fixed; left: 50%; bottom: 74px; transform: translateX(-50%); width: min(600px, calc(100vw - 20px)); max-height: min(72vh, 640px); z-index: 46;
+  background: #fff; border: 1px solid var(--line); border-radius: 18px; box-shadow: var(--shadow-lg); flex-direction: column; overflow: hidden; }
+.map-open .qmap { display: flex; animation: mapUp .16s ease-out; }
+@keyframes mapUp { from { opacity: 0; transform: translate(-50%, 8px); } to { opacity: 1; transform: translate(-50%, 0); } }
+.map-open::after { content: ""; position: fixed; inset: 0; background: rgba(16, 20, 32, .14); z-index: 45; }
+.qm-close { display: grid !important; }
 .qm-head { display: flex; justify-content: space-between; align-items: center; padding: 14px 14px 8px 16px; }
 .qm-head b { display: block; font-size: 15px; }
 .qm-head small { color: var(--muted); font-size: 12.5px; }
-.qm-close { display: none; }
 .qm-prog { height: 5px; background: #eceef4; margin: 0 16px 10px; border-radius: 99px; overflow: hidden; flex: none; }
 .qm-prog i { display: block; height: 100%; background: var(--grad); border-radius: 99px; transition: width .3s; }
 .qm-filters { padding: 0 14px 8px 16px; display: flex; flex-direction: column; gap: 8px; flex: none; }
@@ -86,21 +89,31 @@ ol.roman li { margin: 6px 0; padding-left: 4px; }
 .lg-t { width: 12px; height: 12px; border-radius: 3px; border: 1.5px solid #9aa1af; background: #fff; }
 .lg-t.ok { background: #d9f3e6; border-color: var(--ok); } .lg-t.bad { background: #fde3e3; border-color: var(--bad); }
 .lg-t.okr { background: #fff0d6; border-color: #e09100; } .lg-t.to { background: #ece7fb; border-color: #7a5ad8; }
-.tiles { flex: 1; min-height: 0; overflow: auto; padding: 12px 14px 20px 16px; display: grid; grid-template-columns: repeat(auto-fill, minmax(44px, 1fr)); gap: 8px; align-content: start; }
-.tile { position: relative; height: 40px; border-radius: 9px; border: 1.5px solid #c9ced8; background: #fff; font-weight: 750; font-size: 13.5px; color: var(--ink); cursor: pointer; padding-left: 4px; overflow: hidden; }
+.tiles { flex: 1; min-height: 0; overflow: auto; padding: 14px 14px 20px 16px; display: grid; grid-template-columns: repeat(auto-fill, minmax(50px, 1fr)); gap: 12px 10px; align-content: start; }
+.tile { position: relative; height: 42px; border-radius: 10px; border: 1.5px solid #c9ced8; background: #fff; font-weight: 750; font-size: 14px; color: var(--ink); cursor: pointer; padding-left: 4px; overflow: visible; }
+.tile::before { border-radius: 9px 0 0 9px; }
 .tile::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 5px; }
 .tile.dE::before { background: var(--d-e); } .tile.dM::before { background: var(--d-m); } .tile.dH::before { background: var(--d-h); }
 .tile:hover { box-shadow: 0 0 0 3px var(--brand-100); }
 .tile.s-ok { background: #d9f3e6; border-color: #7fcfa5; color: #0b5e3a; }
 .tile.s-bad { background: #fde3e3; border-color: #f0a2a4; color: #9e1d25; }
-.tile.s-okr { background: #fff0d6; border-color: #f0c070; color: #8a5400; }
+.tile.s-okr { background: #fff4cc; border-color: #f2c94c; color: #8a5f00; }
 .tile.s-to { background: #ece7fb; border-color: #b8a6ee; color: #4b2bd1; }
 .tile.cur { outline: 2.5px solid #12151d; outline-offset: 1px; }
-.tflag { position: absolute; top: -3px; right: 1px; width: 13px; height: 13px; color: var(--flag); }
+.tflag { position: absolute; bottom: -5px; right: -4px; width: 14px; height: 14px; color: var(--flag); filter: drop-shadow(0 0 1px #fff); }
+.tbadge { position: absolute; top: -7px; right: -7px; width: 18px; height: 18px; filter: drop-shadow(0 1px 1px rgba(0,0,0,.18)); }
+.tbadge svg, .lg-b svg { width: 100%; height: 100%; }
+.lg-b { display: inline-block; width: 14px; height: 14px; }
+.lg-d { gap: 3px !important; } .lg-d .dd { width: 7px; height: 7px; }
 .tflag svg { width: 100%; height: 100%; }
 .qm-empty { padding: 24px 16px; color: var(--muted); font-size: 14px; display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
 .qm-empty .mini-btn { color: var(--brand); }
 
+/* a choice already tried and found wrong (still answering) */
+.choice-row.tried .choice { border-color: #f0a2a4; background: #fff6f6; }
+.choice-row.tried .letter { border-color: var(--bad); color: var(--bad); }
+.spr-tried { display: flex; align-items: center; gap: 6px; color: #a01d25; font-size: 14px; margin: 10px 0 0; }
+.spr-tried svg { width: 15px; height: 15px; }
 /* feedback under the question */
 .fb { display: flex; gap: 12px; align-items: flex-start; border-radius: 12px; padding: 12px 14px; margin-top: 18px; }
 .fb > svg { width: 22px; height: 22px; flex: none; margin-top: 1px; }
@@ -188,8 +201,8 @@ ol.roman li { margin: 6px 0; padding-left: 4px; }
 @media (min-width: 900px) {
   .tutor-open.calc-open .calc-dock { width: 360px !important; }
 }
+@media (max-width: 899px) { .qmap { bottom: 64px; max-height: 70vh; } .tiles { grid-template-columns: repeat(auto-fill, minmax(46px, 1fr)); gap: 12px 9px; } }
 @media (max-width: 1180px) and (min-width: 900px) {
-  .panel-open.tutor-open .qmap { width: 250px; }
   .tutor { width: 320px; }
 }
 @media (max-width: 899px) {
@@ -208,11 +221,6 @@ ol.roman li { margin: 6px 0; padding-left: 4px; }
   .sw-q { font-size: 18px; }
   .sw small { font-size: 10.5px; }
   .rush-meta small { display: none; }
-  .qmap { position: fixed; inset: 0 auto 0 0; width: min(340px, 88vw); z-index: 46; box-shadow: var(--shadow-lg); display: flex; transform: translateX(-104%); transition: transform .22s ease; }
-  .panel-mobile .qmap { transform: none; }
-  .panel-mobile::after { content: ""; position: fixed; inset: 0; background: rgba(16, 20, 32, .35); z-index: 45; }
-  .qm-close { display: grid; }
-  .qm-head { padding-top: max(14px, env(safe-area-inset-top)); }
   .tutor { position: fixed; inset: 0; z-index: 47; width: 100%; border: 0; }
   .tu-head { padding-top: max(10px, env(safe-area-inset-top)); }
   .tu-form { padding-bottom: max(10px, env(safe-area-inset-bottom)); }

@@ -15,6 +15,12 @@
   var RUSH = { rw: { E: 50, M: 70, H: 90 }, math: { E: 70, M: 95, H: 120 } };   // seconds per question
   var KEY = 'isatprep:practice:v1';
   var AI_DAILY = 8;
+  var BADGE = {
+    ok: '<svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="9" fill="#16915a"/><path d="M5.8 10.4l2.8 2.8 5.6-6" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    bad: '<svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="9" fill="#d63a3f"/><path d="M7 7l6 6M13 7l-6 6" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/></svg>',
+    okr: '<svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="9" fill="#f2b705" stroke="#c98f00" stroke-width="1"/><rect x="4.6" y="8.4" width="10.8" height="3.2" rx=".6" fill="#fff"/></svg>',
+    to: '<svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="9" fill="#7a5ad8"/><path d="M10 5.6V10l2.8 1.8" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg>'
+  };
   var KHEX = '3ecfa63da7d6047e8b1b5b694cac2db0bc8f1335bbf514537a0acf2ac2bf13b0';
 
   /* =================================================================== utilities */
@@ -76,6 +82,7 @@
     ref: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3.5h10l4 4v13H5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M8 11h8M8 14.5h8M8 18h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M14.5 3.5v4.5h4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>',
     chevLeft: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
     chevRight: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    chevUp: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 15l6-6 6 6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
     chevDown: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
     close: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>',
     check: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
@@ -107,15 +114,17 @@
   function fresh() {
     return { v: 1, user: null, mode: 'untimed', sec: 'rw', cur: { rw: 1, math: 1 }, at: {}, streak: 0, best: 0, sessionMs: 0,
       f: { d: { E: 1, M: 1, H: 1 }, st: 'all', sk: '' }, ui: { abc: false, calcOpen: false, calcW: 0, panel: true },
-      sync: { sent: 0, dirty: false, id: 'p-' + uid(10) }, ai: { day: '', used: 0 }, createdAt: now() };
+      sync: { sent: 0, dirty: false, id: 'p-' + uid(10) }, ai: { day: '', used: 0 }, createdAt: now(), mig: { rw: 1, math: 1 } };
   }
   function load() {
     var raw = Store.get(KEY), s = null;
     try { s = raw ? JSON.parse(raw) : null; } catch (e) { s = null; }
     if (!s || s.v !== 1) s = fresh();
+    var needMig = !!(s.user && !s.mig);
     var d = fresh();
     Object.keys(d).forEach(function (k) { if (s[k] == null) s[k] = d[k]; });
     if (!s.f.d) s.f.d = { E: 1, M: 1, H: 1 };
+    if (needMig) s.mig = {};
     return s;
   }
   function save() { Store.set(KEY, JSON.stringify(P)); }
@@ -158,9 +167,24 @@
     loading[sec] = [cb];
     var s = document.createElement('script');
     s.src = 'practice/bank-' + sec + '.js?v=' + BANK_VER;
-    s.onload = function () { var w = loading[sec]; loading[sec] = null; w.forEach(function (f) { f(!!BANK[sec]); }); };
+    s.onload = function () { if (BANK[sec]) migrate(sec); var w = loading[sec]; loading[sec] = null; w.forEach(function (f) { f(!!BANK[sec]); }); };
     s.onerror = function () { var w = loading[sec]; loading[sec] = null; s.parentNode.removeChild(s); w.forEach(function (f) { f(false); }); };
     document.head.appendChild(s);
+  }
+  // Progress saved before the mixed order (Nov 27) is keyed by the old position: move it to the new numbers once.
+  function migrate(sec) {
+    P.mig = P.mig || {}; if (P.mig[sec]) return;
+    var map = {}; BANK[sec].forEach(function (q) { map[q.o] = q.n; });
+    var at = {};
+    Object.keys(P.at).forEach(function (k) {
+      var p = k.split(':'), r = P.at[k];
+      if (p[0] !== sec) { at[k] = r; return; }
+      var nn = map[+p[1]]; if (!nn) return;
+      if (r.rev && r.last !== 'ok') { r.gave = true; r.showX = true; }   // old releases showed the answer automatically
+      at[sec + ':' + nn] = r;
+    });
+    P.at = at; if (map[P.cur[sec]]) P.cur[sec] = map[P.cur[sec]];
+    P.mig[sec] = 1; save();
   }
   function qs(sec) { return BANK[sec] || []; }
   function qAt(sec, n) { return qs(sec)[n - 1]; }
@@ -253,7 +277,7 @@
   }
   function screenPractice() {
     var sec = P.sec;
-    $app.className = 'app test practice ' + (sec === 'math' ? 'math' : 'rw') + (P.ui.calcOpen && sec === 'math' ? ' calc-open' : '') + (P.ui.panel && !isNarrow() ? ' panel-open' : '') + (P.mode === 'rush' ? ' rush' : '');
+    $app.className = 'app test practice ' + (sec === 'math' ? 'math' : 'rw') + (P.ui.calcOpen && sec === 'math' ? ' calc-open' : '') + (P.mode === 'rush' ? ' rush' : '');
     $app.innerHTML =
       '<header class="tb ptb">' +
         '<div class="tb-left"><a class="wordmark sm" href="practice.html" data-action="home" aria-label="Practice home">' + wordmark() + '</a>' +
@@ -308,11 +332,12 @@
         '<div class="frow"><select id="fSt" aria-label="Show">' + [['all', 'All questions'], ['new', 'Not tried yet'], ['wrong', 'My mistakes'], ['marked', 'Marked for review'], ['right', 'Correct']].map(function (o) { return '<option value="' + o[0] + '"' + (P.f.st === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select>' +
         '<select id="fSk" aria-label="Skill"><option value="">All skills</option>' + skills.map(function (s) { return '<option' + (P.f.sk === s ? ' selected' : '') + '>' + esc(s) + '</option>'; }).join('') + '</select></div>' +
       '</div>' +
-      '<div class="qm-legend"><span><i class="lg-t ok"></i>Correct</span><span><i class="lg-t bad"></i>Wrong</span><span><i class="lg-t okr"></i>Correct on retry</span>' + (P.mode === 'rush' || hasTimeouts() ? '<span><i class="lg-t to"></i>Timed out</span>' : '') + '<span><i class="lg-t new"></i>Not tried</span></div>' +
+      '<div class="qm-legend"><span><i class="lg-b">' + BADGE.ok + '</i>Correct</span><span><i class="lg-b">' + BADGE.bad + '</i>Wrong</span><span><i class="lg-b">' + BADGE.okr + '</i>Correct, not on the 1st try</span>' + (P.mode === 'rush' || hasTimeouts() ? '<span><i class="lg-b">' + BADGE.to + '</i>Timed out</span>' : '') +
+        '<span class="lg-d"><i class="dd e"></i><i class="dd m"></i><i class="dd h"></i>Strip = difficulty</span></div>' +
       (list.length ? '<div class="tiles">' + list.map(function (q) {
         var s = status(sec, q.n), r = P.at[sec + ':' + q.n];
         return '<button class="tile d' + q.d + (s ? ' s-' + s : '') + (q.n === P.cur[sec] ? ' cur' : '') + '" data-action="goto" data-n="' + q.n + '" title="' + DIFF[q.d] + ' · ' + esc(q.sk) + '" aria-label="Question ' + q.n + ', ' + DIFF[q.d] + (s ? ', ' + statusWord(s) : ', not tried') + '">' + q.n +
-          (r && r.mk ? '<i class="tflag">' + I.bookmarkOn + '</i>' : '') + '</button>';
+          (s ? '<i class="tbadge ' + s + '">' + BADGE[s] + '</i>' : '') + (r && r.mk ? '<i class="tflag">' + I.bookmarkOn + '</i>' : '') + '</button>';
       }).join('') + '</div>' : '<div class="qm-empty">No questions match these filters.<button class="mini-btn" data-action="fclear">Show all</button></div>');
     var st = $('#fSt'), sk = $('#fSk');
     st.addEventListener('change', function () { P.f.st = st.value; save(); paintMap(); });
@@ -329,7 +354,7 @@
     if (!q) { P.cur[sec] = 1; q = curQ(); }
     var r = rec(sec, q.n, false) || {};
     view.qStart = now();
-    view.pendingAnswer = r.a != null && !r.rev ? r.a : null;
+    view.pendingAnswer = r.a != null && !r.rev && (r.wr || []).indexOf(r.a) < 0 ? r.a : null;
     view.rushLeft = null; view.lastTick = now();
     var tags = '<span class="dtag ' + q.d.toLowerCase() + '"><i></i>' + DIFF[q.d] + '</span><span class="sktag">' + esc(q.sk) + '</span>';
     var qhead = '<div class="qhead"><div class="qnum">' + q.n + '</div>' +
@@ -350,26 +375,31 @@
     paintBottom(); paintClock();
     if (tutorOpen) paintTutorHead();
   }
+  // r.rev  = finished for now (solved, or the student pressed Show answer) · r.gave = answer shown without solving
+  // r.tout = Rush time ran out (the student may keep trying without the clock) · r.wr = wrong answers tried this round
+  // r.showX = explanation open. Explanations never open by themselves: the student asks for them.
   function revealed(r) { return !!(r && r.rev); }
   function paintAnswer() {
     var sec = P.sec, q = curQ(), r = rec(sec, q.n, false) || {}, box = $('#answerArea');
-    var rev = revealed(r), key = rev ? keyOf(sec, q) : null, mine = rev ? r.a : view.pendingAnswer;
+    var rev = revealed(r), gave = rev && r.gave, key = rev ? keyOf(sec, q) : null, mine = rev ? r.a : view.pendingAnswer, wr = r.wr || [];
     if (q.t === 'mcq') {
       var st = r.x || {};
       box.innerHTML = '<div class="choices' + (rev ? ' review' : '') + (P.ui.abc && !rev ? ' abc-mode' : '') + '" role="radiogroup" aria-label="Answer choices">' + q.c.map(function (c, i) {
-        var L = 'ABCD'.charAt(i), sel = mine === L, isKey = rev && L === key, wrong = rev && sel && !isKey, x = !!st[L] && !rev;
-        return '<div class="choice-row' + (sel && !rev ? ' selected' : '') + (isKey ? ' key' : '') + (wrong ? ' wrong' : '') + (x ? ' struck' : '') + '">' +
-          '<div class="choice" role="radio" tabindex="0" aria-checked="' + sel + '" data-action="choose" data-letter="' + L + '"><span class="letter">' + L + '</span><span class="ctext">' + c + '</span>' +
-          (isKey ? '<span class="tag ok">' + I.check + ' Correct</span>' : wrong ? '<span class="tag bad">' + I.cross + ' Your answer</span>' : '') + '</div>' +
+        var L = 'ABCD'.charAt(i), sel = mine === L, isKey = rev && L === key, tried = wr.indexOf(L) >= 0 && !isKey, x = !!st[L] && !rev;
+        var tag = isKey ? '<span class="tag ok">' + I.check + (gave ? ' Correct answer' : ' Correct') + '</span>' : tried ? '<span class="tag bad">' + I.cross + ' Tried</span>' : '';
+        return '<div class="choice-row' + (sel && !rev ? ' selected' : '') + (isKey ? ' key' : '') + (tried ? (rev ? ' wrong' : ' tried') : '') + (x ? ' struck' : '') + '">' +
+          '<div class="choice" role="radio" tabindex="0" aria-checked="' + sel + '" data-action="choose" data-letter="' + L + '"><span class="letter">' + L + '</span><span class="ctext">' + c + '</span>' + tag + '</div>' +
           '<button class="strike" data-action="strike" data-letter="' + L + '" aria-label="Cross out choice ' + L + '">' + (x ? '<u>Undo</u>' : '<span class="strike-l">' + L + '</span>') + '</button></div>';
       }).join('') + '</div>';
     } else if (rev) {
-      var ok = isRight(sec, q, r.a);
-      box.innerHTML = '<div class="spr-review"><div><small>Your answer</small><b class="' + (r.a ? (ok ? 'ok' : 'bad') : 'om') + '">' + (r.a ? esc(r.a) : '—') + '</b></div><div><small>Correct answer</small><b class="ok">' + esc(keyText(sec, q)) + '</b></div></div>';
+      var ok = !gave;
+      box.innerHTML = '<div class="spr-review"><div><small>Your answer</small><b class="' + (ok ? 'ok' : r.a ? 'bad' : 'om') + '">' + (r.a ? esc(r.a) : '—') + '</b></div>' +
+        (gave ? '<div><small>Correct answer</small><b class="ok">' + esc(keyText(sec, q)) + '</b></div>' : '') + '</div>';
     } else {
       box.innerHTML = '<div class="spr"><label class="spr-label" for="sprIn">Your answer</label>' +
         '<div class="spr-row"><input id="sprIn" class="spr-input" type="text" inputmode="decimal" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" maxlength="6" value="' + esc(mine || '') + '">' +
         '<div class="spr-keys"><button type="button" class="key" data-action="spr-key" data-key="-" aria-label="Negative sign">−</button><button type="button" class="key" data-action="spr-key" data-key="/" aria-label="Fraction bar">/</button><button type="button" class="key" data-action="spr-key" data-key="." aria-label="Decimal point">.</button></div></div>' +
+        (wr.length ? '<p class="spr-tried">' + I.cross + ' Tried: ' + wr.map(esc).join(', ') + '</p>' : '') +
         '<div class="spr-preview" id="sprPrev"></div><p class="spr-hint" id="sprHint" hidden></p></div>';
       bindSpr();
     }
@@ -402,68 +432,70 @@
   /* ---------------------------------------------------------------- feedback & checking */
   function paintFeedback() {
     var sec = P.sec, q = curQ(), r = rec(sec, q.n, false) || {}, box = $('#feedback'); if (!box) return;
-    var h = '';
-    if (revealed(r)) {
-      var s = r.s, last = r.last;
-      if (last === 'to') h += '<div class="fb warn">' + I.clock + '<div><b>Time’s up!</b><span>The answer and explanation are below. Your streak starts again.</span></div></div>';
-      else if (last === 'ok') h += '<div class="fb ok">' + I.check + '<div><b>' + (s === 'ok' ? 'Correct!' : 'Correct on this try!') + '</b><span>' + (P.streak > 1 ? I.fire + ' ' + P.streak + ' in a row' : 'Nice work.') + '</span></div></div>';
-      else h += '<div class="fb bad">' + I.cross + '<div><b>Not quite.</b><span>The correct answer is <b>' + esc(keyText(sec, q)) + '</b>.</span></div></div>';
-      h += '<div class="explain"><b>' + I.spark + ' Explanation</b><div>' + q.x + '</div></div>' +
-        '<div class="fb-actions"><button class="btn ghost" data-action="tutor-ask">' + I.bot + ' Ask the AI tutor</button><button class="btn ghost" data-action="retry">' + I.redo + ' Practice again</button><button class="btn primary" data-action="next">Next question ' + I.chevRight + '</button></div>';
-    } else if (r.last === 'bad' && P.mode !== 'rush') {
-      h = '<div class="fb bad">' + I.cross + '<div><b>Not quite.</b><span>Try again, or show the answer.</span></div></div>' +
-        '<div class="fb-actions"><button class="btn primary" id="checkBtn" data-action="check">Check answer</button><button class="btn ghost" data-action="reveal">Show answer</button><button class="btn ghost" data-action="tutor-ask">' + I.bot + ' Get a hint</button></div>';
+    var h = '', hint = '<button class="btn ghost" data-action="tutor-ask">' + I.bot + ' Get a hint</button>';
+    var xBtn = '<button class="btn ghost" data-action="show-x">' + I.spark + ' Show explanation</button>';
+    var after = '<button class="btn ghost" data-action="tutor-ask">' + I.bot + ' Ask the AI tutor</button><button class="btn ghost" data-action="retry">' + I.redo + ' Practice again</button><button class="btn primary" data-action="next">Next question ' + I.chevRight + '</button>';
+    if (revealed(r) && !r.gave) {
+      h = '<div class="fb ok">' + I.check + '<div><b>' + (r.s === 'okr' && (r.wr || []).length ? 'Correct, on a retry!' : 'Correct!') + '</b><span>' + (P.streak > 1 ? I.fire + ' ' + P.streak + ' in a row' : 'Nice work.') + '</span></div></div>' +
+        (r.showX ? explainBox(q) : '') + '<div class="fb-actions">' + (r.showX ? '' : xBtn) + after + '</div>';
+    } else if (revealed(r)) {
+      h = '<div class="fb bad">' + I.cross + '<div><b>The correct answer is ' + esc(keyText(sec, q)) + '.</b><span>Read the explanation, then try a similar question.</span></div></div>' +
+        explainBox(q) + '<div class="fb-actions">' + after + '</div>';
     } else {
-      h = '<div class="fb-actions"><button class="btn primary" id="checkBtn" data-action="check">Check answer</button>' + (P.mode === 'rush' ? '' : '<button class="btn ghost" data-action="tutor-ask">' + I.bot + ' Get a hint</button>') + '</div>';
+      if (r.tout) h = '<div class="fb warn">' + I.clock + '<div><b>Time’s up!</b><span>Your streak starts again. You can keep trying without the clock, or show the answer.</span></div></div>';
+      else if (r.last === 'bad') h = '<div class="fb bad">' + I.cross + '<div><b>Not quite.</b><span>Try another answer, or show the answer.</span></div></div>';
+      h += '<div class="fb-actions"><button class="btn primary" id="checkBtn" data-action="check">Check answer</button>' +
+        (r.last === 'bad' || r.tout ? '<button class="btn ghost" data-action="reveal">Show answer</button>' : '') + (P.mode === 'rush' && !r.tout ? '' : hint) + '</div>';
     }
     box.innerHTML = h; renderMath(box); paintCheckBtn();
   }
+  function explainBox(q) { return '<div class="explain"><b>' + I.spark + ' Explanation</b><div>' + q.x + '</div></div>'; }
+  function showExplanation() { var r = rec(P.sec, curQ().n, true); r.showX = true; save(); paintFeedback(); }
   function paintCheckBtn() { var b = $('#checkBtn'); if (b) b.disabled = !view.pendingAnswer; }
-  // Question time stops once the answer is shown (reading the explanation isn't solving time); session time keeps going.
+  // Question time stops once the question is finished; session time keeps going.
   function addTime(r) { var t = now(); if (view.qStart && !document.hidden) { var dt = Math.min(t - view.qStart, 30 * 60000); if (!r.rev) r.ms = (r.ms || 0) + dt; P.sessionMs += dt; } view.qStart = t; }
+  function refresh(q) { paintAnswer(); paintFeedback(); renderMath($('#answerArea')); paintMapTile(q.n); paintBottom(); paintClock(); }
   function check() {
     var sec = P.sec, q = curQ(); if (!view.pendingAnswer) return;
     var r = rec(sec, q.n, true); if (r.rev) return;
     addTime(r);
-    var ok = isRight(sec, q, view.pendingAnswer);
-    r.a = view.pendingAnswer; r.tries = (r.tries || 0) + 1; r.m = P.mode; r.when = now();
+    var a = view.pendingAnswer, ok = isRight(sec, q, a);
+    r.a = a; r.tries = (r.tries || 0) + 1; r.m = P.mode; r.when = now();
     if (ok) {
-      r.s = (r.s === 'bad' || r.s === 'to' || r.wrongOnce) ? 'okr' : (r.s || 'ok');
-      if (r.s === 'okr' && r.first == null) r.first = 'bad';
+      if (r.s !== 'ok' && r.s !== 'okr') r.s = (r.wrongOnce || r.tout) ? 'okr' : 'ok';
       if (r.first == null) r.first = 'ok';
-      r.last = 'ok'; r.rev = true; P.streak++; if (P.streak > P.best) P.best = P.streak;
+      r.last = 'ok'; r.rev = true; r.gave = false; r.showX = false; P.streak++; if (P.streak > P.best) P.best = P.streak;
     } else {
       r.wrongOnce = true; if (r.first == null) r.first = 'bad';
-      if (r.s !== 'ok' && r.s !== 'okr') r.s = 'bad';
-      r.last = 'bad'; P.streak = 0;
-      if (P.mode === 'rush') r.rev = true;
+      if (r.s !== 'ok' && r.s !== 'okr' && r.s !== 'to') r.s = 'bad';
+      r.last = 'bad'; r.wr = (r.wr || []).concat([a]); P.streak = 0;
+      view.pendingAnswer = null;
     }
-    P.sync.dirty = true; save();
-    paintAnswer(); paintFeedback(); renderMath($('#answerArea')); paintMapTile(q.n); paintBottom(); paintClock();
+    P.sync.dirty = true; save(); refresh(q);
     maybeSync(); checkSectionComplete(sec);
   }
   function reveal() {
     var sec = P.sec, q = curQ(), r = rec(sec, q.n, true);
-    addTime(r); r.rev = true; if (!r.last) r.last = 'bad'; if (r.s !== 'ok' && r.s !== 'okr') r.s = 'bad'; if (r.first == null) r.first = 'bad';
-    P.streak = 0; P.sync.dirty = true; save();
-    paintAnswer(); paintFeedback(); renderMath($('#answerArea')); paintMapTile(q.n); paintClock();
+    addTime(r); r.rev = true; r.gave = true; r.showX = true; if (!r.last) r.last = 'bad';
+    if (r.s !== 'ok' && r.s !== 'okr' && r.s !== 'to') r.s = 'bad'; if (r.first == null) r.first = 'bad';
+    P.streak = 0; P.sync.dirty = true; save(); refresh(q); maybeSync(); checkSectionComplete(sec);
   }
   function timeUp() {
-    var sec = P.sec, q = curQ(), r = rec(sec, q.n, true); if (r.rev) return;
-    addTime(r); r.rev = true; r.last = 'to'; r.a = view.pendingAnswer; r.m = 'rush'; r.when = now();
+    var sec = P.sec, q = curQ(), r = rec(sec, q.n, true); if (r.rev || r.tout) return;
+    addTime(r); r.tout = true; r.rl = 0; r.m = 'rush'; r.when = now();
     if (r.s !== 'ok' && r.s !== 'okr') r.s = 'to'; if (r.first == null) r.first = 'to';
-    P.streak = 0; P.sync.dirty = true; save();
-    paintAnswer(); paintFeedback(); renderMath($('#answerArea')); paintMapTile(q.n); paintBottom(); paintClock();
+    P.streak = 0; P.sync.dirty = true; save(); refresh(q);
     maybeSync(); checkSectionComplete(sec);
   }
   function retry() {
     var sec = P.sec, q = curQ(), r = rec(sec, q.n, true);
-    addTime(r); r.rev = false; r.last = ''; r.a = null; r.x = {}; r.rl = null; save();
+    addTime(r); r.rev = false; r.gave = false; r.showX = false; r.tout = false; r.wr = []; r.last = ''; r.a = null; r.x = {}; r.rl = null; save();
     view.pendingAnswer = null; view.rushLeft = null; view.qStart = now(); view.lastTick = now();
     paintAnswer(); paintFeedback(); renderMath($('#answerArea')); paintClock();
   }
   function paintMapTile(n) {
-    var t = $('.tile[data-n="' + n + '"]'); if (!t) return paintMap();
+    if ($app.classList.contains('map-open')) return paintMap();
+    var t = $('.tile[data-n="' + n + '"]'); if (!t) return;
     var sec = P.sec, s = status(sec, n);
     t.className = t.className.replace(/\bs-\w+/g, '').trim() + (s ? ' s-' + s : '');
     var head = $('.qm-head small'); if (head) { var d = doneCount(sec); head.textContent = d + ' / ' + qs(sec).length + ' done · ' + pct(correctCount(sec), d) + '% correct'; }
@@ -473,6 +505,7 @@
     var sec = P.sec, q = curQ(), r = rec(sec, q.n, false) || {};
     if (r.rev) return;
     if (P.ui.abc && r.x && r.x[L]) return;
+    if ((r.wr || []).indexOf(L) >= 0) { toast('You already tried ' + L + '. Pick another answer.'); return; }
     view.pendingAnswer = L;
     $$('.choice-row').forEach(function (row) { var on = row.querySelector('[data-letter]').getAttribute('data-letter') === L; row.classList.toggle('selected', on); row.querySelector('.choice').setAttribute('aria-checked', on); });
     paintCheckBtn();
@@ -487,7 +520,7 @@
     P.cur[sec] = n; save();
     $$('.tile.cur').forEach(function (t) { t.classList.remove('cur'); });
     var t = $('.tile[data-n="' + n + '"]'); if (t) { t.classList.add('cur'); try { t.scrollIntoView({ block: 'nearest' }); } catch (e) { } }
-    if (isNarrow()) closePanel();
+    closePanel();
     paintQuestion();
   }
   function step(dir) {
@@ -508,7 +541,7 @@
     var pos = 0; list.forEach(function (q, i) { if (q.n === cur) pos = i + 1; });
     var label = P.f.st !== 'all' || P.f.sk || !(P.f.d.E && P.f.d.M && P.f.d.H) ? (pos ? pos + ' of ' + list.length + ' in list' : 'Not in this list') : 'Question ' + cur + ' of ' + qs(sec).length;
     bb.innerHTML = '<div class="bb-left"><span class="who">' + esc(P.user ? P.user.name : '') + '</span></div>' +
-      '<div class="bb-center"><button class="qnav-btn" data-action="panel">' + I.grid + ' <span>' + label + '</span></button></div>' +
+      '<div class="bb-center"><button class="qnav-btn" data-action="panel" aria-haspopup="dialog" aria-label="Open the question map"><span>' + label + '</span>' + I.chevUp + '</button></div>' +
       '<div class="bb-right"><button class="btn ghost" data-action="back">' + I.chevLeft + '<span>Back</span></button><button class="btn primary" data-action="next"><span>Next</span>' + I.chevRight + '</button></div>' +
       '<div class="bb-progress" aria-hidden="true"><i style="width:' + pct(doneCount(sec), qs(sec).length) + '%"></i></div>';
   }
@@ -519,7 +552,7 @@
     if (!$('#clockBox')) return stopTicker();
     var q = curQ(); if (!q) return;
     var r = P.at[P.sec + ':' + q.n];
-    if (P.mode === 'rush' && !revealed(r)) {
+    if (P.mode === 'rush' && !revealed(r) && !(r && r.tout)) {
       if (view.rushLeft == null) view.rushLeft = (r && r.rl != null) ? r.rl : RUSH[P.sec][q.d] * 1000;
       var t = now(); view.rushLeft -= (t - (view.lastTick || t));      // Rush keeps counting in another tab: no looking things up
       view.lastTick = now();
@@ -532,7 +565,7 @@
     var q = curQ(), r = q && P.at[P.sec + ':' + q.n];
     if (P.mode === 'rush') {
       var total = RUSH[P.sec][q.d];
-      box.innerHTML = revealed(r) ? '<div class="rush-done"><span class="streak">' + I.fire + ' ' + P.streak + '</span><small>streak · best ' + P.best + '</small></div>'
+      box.innerHTML = revealed(r) || (r && r.tout) ? '<div class="rush-done"><span class="streak">' + I.fire + ' ' + P.streak + '</span><small>streak · best ' + P.best + '</small></div>'
         : '<div class="rush-clock"><svg viewBox="0 0 40 40" class="rc-ring"><circle cx="20" cy="20" r="17" class="rc-bg"/><circle cx="20" cy="20" r="17" class="rc-fg" id="rcFg"/></svg><b id="rcTxt">' + total + '</b></div><div class="rush-meta"><span class="streak">' + I.fire + ' ' + P.streak + '</span><small>' + total + ' s · ' + DIFF[q.d] + '</small></div>';
     } else {
       box.innerHTML = '<div class="sw"><span class="sw-q" id="swQ">0:00</span><small>this question · session <span id="swS">0:00</span></small></div>';
@@ -561,12 +594,13 @@
   window.addEventListener('pagehide', function () { var q = P && P.user && $('#stage') && curQ(); if (q) { addTime(rec(P.sec, q.n, true)); save(); } sendSync(true); });
 
   /* ---------------------------------------------------------------- panel (map) */
+  // The question map is a pop-up opened from the bottom bar, so the question always has the whole screen.
   function togglePanel() {
-    if (isNarrow()) { $app.classList.toggle('panel-mobile'); return; }
-    P.ui.panel = !P.ui.panel; save(); $app.classList.toggle('panel-open', P.ui.panel);
-    if (D.calc) setTimeout(function () { try { D.calc.resize(); } catch (e) { } }, 60);
+    var open = !$app.classList.contains('map-open');
+    $app.classList.toggle('map-open', open);
+    if (open) { paintMap(); var cur = $('.tile.cur'); if (cur) try { cur.scrollIntoView({ block: 'center' }); } catch (e) { } }
   }
-  function closePanel() { $app.classList.remove('panel-mobile'); }
+  function closePanel() { $app.classList.remove('map-open'); }
 
   /* =================================================================== stats */
   function doneCount(sec) { var n = 0; Object.keys(P.at).forEach(function (k) { if (k.indexOf(sec + ':') === 0 && P.at[k].s) n++; }); return n; }
@@ -864,7 +898,7 @@
 
   /* =================================================================== events */
   document.addEventListener('click', function (e) {
-    if (e.target === $app && $app.classList.contains('panel-mobile')) { closePanel(); return; }   // tap on the dimmed backdrop
+    if ($app.classList.contains('map-open') && !e.target.closest('#qmap') && !e.target.closest('[data-action="panel"]')) { closePanel(); if (!e.target.closest('[data-action]')) return; }   // click outside closes the map
     var t = e.target.closest('[data-action]'); if (!t) return;
     var a = t.getAttribute('data-action');
     switch (a) {
@@ -896,6 +930,7 @@
       case 'check': check(); break;
       case 'reveal': reveal(); break;
       case 'retry': retry(); break;
+      case 'show-x': showExplanation(); break;
       case 'next': step(1); break;
       case 'back': step(-1); break;
       case 'calc': toggleCalc(); break;
@@ -907,7 +942,7 @@
     }
   });
   document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape') { if ($layer.classList.contains('open')) closeLayer(); else if ($app.classList.contains('panel-mobile')) closePanel(); }
+    if (e.key === 'Escape') { if ($layer.classList.contains('open')) closeLayer(); else if ($app.classList.contains('map-open')) closePanel(); }
     if (!$('#stage') || $layer.classList.contains('open')) return;
     var tag = (e.target.tagName || '').toLowerCase(); if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
     if (e.key === 'ArrowRight') step(1); else if (e.key === 'ArrowLeft') step(-1);
@@ -931,11 +966,7 @@
     P.mode = m; P.sync.dirty = true; save(); screenPractice();
     toast(m === 'rush' ? 'Rush mode on. Beat the clock!' : 'Untimed practice. Take your time.', 'ok');
   }
-  window.addEventListener('resize', function () {
-    if (!$app.classList.contains('practice')) return;
-    if (!isNarrow()) { $app.classList.remove('panel-mobile'); $app.classList.toggle('panel-open', !!P.ui.panel); }
-    else $app.classList.remove('panel-open');
-  });
+
 
   /* =================================================================== boot */
   P = load();
