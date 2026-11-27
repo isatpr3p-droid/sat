@@ -92,6 +92,8 @@
     chevRight: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
     moon: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/></svg>',
     sun: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.9"/><path d="M12 2.5v2.2M12 19.3v2.2M4.6 4.6l1.6 1.6M17.8 17.8l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.6 19.4l1.6-1.6M17.8 6.2l1.6-1.6" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>',
+    marker: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 4.5l5 5-8.5 8.5H6v-5z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/><path d="M4 21h16" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>',
+    listCheck: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7l1.6 1.6L8.5 5.6M4 15l1.6 1.6 2.9-3" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 7h8M12 15h8" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>',
     chevUp: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 15l6-6 6 6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
     chevDown: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
     close: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>',
@@ -298,6 +300,7 @@
         '<div class="tb-right">' +
           '<button class="tool mode-tool" data-action="mode" title="Switch mode">' + (P.mode === 'rush' ? I.bolt : I.leaf) + '<span>' + (P.mode === 'rush' ? 'Rush' : 'Untimed') + '</span></button>' +
           (sec === 'math' ? '<button class="tool" data-action="calc" aria-pressed="' + (P.ui.calcOpen ? 'true' : 'false') + '">' + I.calc + '<span><b class="full">Calculator</b><b class="short">Calc</b></span></button><button class="tool" data-action="reference">' + I.ref + '<span><b class="full">Reference</b><b class="short">Ref</b></span></button>' : '') +
+          '<button class="tool" data-action="hl-help" title="Highlight text">' + I.marker + '<span>Highlight</span></button>' +
           '<button class="tool" data-action="tutor" aria-pressed="false">' + I.bot + '<span><b class="full">AI tutor</b><b class="short">Tutor</b></span></button>' +
           '<button class="tool" data-action="report">' + I.chart + '<span>Report</span></button>' + themeBtn('tool theme-tool') +
         '</div>' +
@@ -334,23 +337,26 @@
     var skills = []; all.forEach(function (q) { if (skills.indexOf(q.sk) < 0) skills.push(q.sk); });
     var d = doneCount(sec);
     el.innerHTML =
-      '<div class="qm-head"><b class="qm-title">' + SEC[sec].short + ' Questions</b>' +
-        '<label class="qm-pill">' + I.filter + '<select id="fSt" aria-label="Show">' + [['all', 'All questions'], ['new', 'Not tried yet'], ['wrong', 'My mistakes'], ['marked', 'For review'], ['right', 'Correct']].map(function (o) { return '<option value="' + o[0] + '"' + (P.f.st === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></label>' +
+      '<div class="qm-head"><b class="qm-title" title="' + d + '/' + all.length + ' done · ' + pct(correctCount(sec), d) + '% correct">Questions</b>' +
+        '<label class="qm-pill">' + I.listCheck + '<select id="fSt" aria-label="Show">' + [['all', 'All questions'], ['new', 'Not tried yet'], ['wrong', 'My mistakes'], ['marked', 'For review'], ['right', 'Correct']].map(function (o) { return '<option value="' + o[0] + '"' + (P.f.st === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></label>' +
+        '<button class="icon-btn qm-ftog" data-action="ftoggle" aria-pressed="' + (showFilters || fActive()) + '" aria-label="Filter by difficulty or skill">' + I.filter + '</button>' +
         '<button class="icon-btn qm-close" data-action="panel" aria-label="Close question map">' + I.close + '</button></div>' +
-      '<div class="qm-filters"><div class="dchips">' + ['E', 'M', 'H'].map(function (k) { return '<button class="dchip ' + k.toLowerCase() + (P.f.d[k] ? ' on' : '') + '" data-action="fd" data-d="' + k + '" aria-pressed="' + !!P.f.d[k] + '">' + DIFF[k] + '</button>'; }).join('') + '</div>' +
-        '<select id="fSk" class="qm-skill" aria-label="Skill"><option value="">All skills</option>' + skills.map(function (s) { return '<option' + (P.f.sk === s ? ' selected' : '') + '>' + esc(s) + '</option>'; }).join('') + '</select></div>' +
+      (showFilters || fActive() ? '<div class="qm-filters"><div class="dchips">' + ['E', 'M', 'H'].map(function (k) { return '<button class="dchip ' + k.toLowerCase() + (P.f.d[k] ? ' on' : '') + '" data-action="fd" data-d="' + k + '" aria-pressed="' + !!P.f.d[k] + '">' + DIFF[k] + '</button>'; }).join('') + '</div>' +
+        '<select id="fSk" class="qm-skill" aria-label="Skill"><option value="">All skills</option>' + skills.map(function (s) { return '<option' + (P.f.sk === s ? ' selected' : '') + '>' + esc(s) + '</option>'; }).join('') + '</select></div>' : '') +
       '<div class="qm-legend"><span><i class="lg-b">' + BADGE.ok + '</i>Correct</span><span><i class="lg-b">' + BADGE.bad + '</i>Incorrect</span><span><i class="lg-f">' + I.bookmarkOn + '</i>For Review</span><span><i class="lg-b">' + BADGE.okr + '</i>Correct (incorrect attempts)</span>' +
-        (P.mode === 'rush' || hasTimeouts() ? '<span><i class="lg-b">' + BADGE.to + '</i>Timed out</span>' : '') + '<span class="qm-done">' + d + '/' + all.length + ' done · ' + pct(correctCount(sec), d) + '% correct</span></div>' +
+        (P.mode === 'rush' || hasTimeouts() ? '<span><i class="lg-b">' + BADGE.to + '</i>Timed out</span>' : '') + '</div>' +
       (list.length ? '<div class="tiles">' + list.map(function (q) {
         var s = status(sec, q.n), r = P.at[sec + ':' + q.n];
         return '<button class="tile d' + q.d + (s ? ' s-' + s : '') + (q.n === P.cur[sec] ? ' cur' : '') + '" data-action="goto" data-n="' + q.n + '" title="' + DIFF[q.d] + ' · ' + esc(q.sk) + '" aria-label="Question ' + q.n + ', ' + DIFF[q.d] + (s ? ', ' + statusWord(s) : ', not tried') + '">' + q.n +
           (s ? '<i class="tbadge ' + s + '">' + BADGE[s] + '</i>' : '') + (r && r.mk ? '<i class="tflag">' + I.bookmarkOn + '</i>' : '') + '</button>';
       }).join('') + '</div>' : '<div class="qm-empty">No questions match these filters.<button class="mini-btn" data-action="fclear">Show all</button></div>');
     var st = $('#fSt'), sk = $('#fSk');
-    st.addEventListener('change', function () { P.f.st = st.value; save(); paintMap(); });
-    sk.addEventListener('change', function () { P.f.sk = sk.value; save(); paintMap(); });
+    st.addEventListener('change', function () { P.f.st = st.value; save(); paintMap(); paintBottom(); });
+    if (sk) sk.addEventListener('change', function () { P.f.sk = sk.value; save(); paintMap(); paintBottom(); });
     var cur = $('.tile.cur', el); if (cur && cur.scrollIntoView) try { cur.scrollIntoView({ block: 'nearest' }); } catch (e) { }
   }
+  var showFilters = false;
+  function fActive() { return !!(P.f.sk || !(P.f.d.E && P.f.d.M && P.f.d.H)); }
   function hasTimeouts() { return Object.keys(P.at).some(function (k) { return P.at[k].s === 'to'; }); }
   function statusWord(s) { return { ok: 'correct', okr: 'correct on retry', bad: 'wrong', to: 'timed out' }[s] || 'not tried'; }
 
@@ -377,7 +383,7 @@
       stage.innerHTML = '<section class="pane question-pane math-pane" id="qPane"><div class="math-col">' + body + '</div></section>';
     }
     paintAnswer(); paintFeedback();
-    renderMath(stage);
+    renderMath(stage); paintAllHl(); hideHlBar();
     $$('.pane', stage).forEach(function (p) { p.scrollTop = 0; }); stage.scrollTop = 0;
     paintBottom(); paintClock();
     if (tutorOpen) paintTutorHead();
@@ -859,6 +865,83 @@
       .catch(function () { clearTimeout(to); tutorBusy = false; chats[k].push({ role: 'model', text: 'Couldn’t reach the tutor. Check your connection and try again.', err: true }); paintLog(); });
   }
 
+
+  /* =================================================================== highlighting (like Bluebook)
+     Select text in the passage or the question → "Highlight". Tap a highlight → "Remove".
+     Saved per question as character ranges of the rendered text, so they come back after a reload. */
+  var HL_AREAS = { p: '.passage-pane .passage', q: '#qPane .prompt' };
+  function hlRanges(key) { var q = curQ(), r = q && P.at[P.sec + ':' + q.n]; return (r && r.hl && r.hl[key]) || []; }
+  function hlTextNodes(root) {
+    var out = [], w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null), n;
+    while ((n = w.nextNode())) out.push(n);
+    return out;
+  }
+  function inMath(node) { var e = node.parentNode; while (e && e !== document) { if (e.classList && (e.classList.contains('katex') || e.tagName === 'svg')) return true; e = e.parentNode; } return false; }
+  function offsetIn(root, container, off) {
+    var rg = document.createRange(); rg.setStart(root, 0);
+    try { rg.setEnd(container, off); } catch (e) { return -1; }
+    return rg.toString().length;
+  }
+  function paintHl(key) {
+    var root = $(HL_AREAS[key]); if (!root) return;
+    $$('mark.hl', root).forEach(function (m) { var t = document.createTextNode(m.textContent); m.parentNode.replaceChild(t, m); });
+    root.normalize();
+    hlRanges(key).forEach(function (rg, idx) {
+      var s0 = rg[0], e0 = rg[1], pos = 0;
+      hlTextNodes(root).forEach(function (node) {
+        var len = node.nodeValue.length, a = pos, b = pos + len; pos = b;
+        if (b <= s0 || a >= e0 || inMath(node)) return;
+        var from = Math.max(0, s0 - a), to = Math.min(len, e0 - a);
+        if (to <= from || !node.nodeValue.slice(from, to).trim()) return;
+        var mid = node; if (from > 0) mid = node.splitText(from);
+        if (to - from < mid.nodeValue.length) mid.splitText(to - from);
+        var mk = document.createElement('mark'); mk.className = 'hl'; mk.setAttribute('data-k', key); mk.setAttribute('data-i', idx);
+        mid.parentNode.replaceChild(mk, mid); mk.appendChild(mid);
+      });
+    });
+  }
+  function paintAllHl() { Object.keys(HL_AREAS).forEach(paintHl); }
+  function addHl(key, s0, e0) {
+    var q = curQ(), r = rec(P.sec, q.n, true);
+    r.hl = r.hl || {}; var list = (r.hl[key] || []).concat([[s0, e0]]).sort(function (x, y) { return x[0] - y[0]; });
+    var merged = [];
+    list.forEach(function (x) { var last = merged[merged.length - 1]; if (last && x[0] <= last[1]) last[1] = Math.max(last[1], x[1]); else merged.push([x[0], x[1]]); });
+    r.hl[key] = merged; save(); paintHl(key);
+  }
+  function removeHl(key, idx) {
+    var q = curQ(), r = rec(P.sec, q.n, true); if (!r.hl || !r.hl[key]) return;
+    r.hl[key].splice(idx, 1); save(); paintHl(key);
+  }
+  var hlBar = null;
+  function hideHlBar() { if (hlBar) { hlBar.remove(); hlBar = null; } }
+  function showHlBar(rect, html) {
+    hideHlBar();
+    hlBar = document.createElement('div'); hlBar.className = 'hl-bar'; hlBar.innerHTML = html;
+    hlBar.addEventListener('mousedown', function (e) { e.preventDefault(); });   // keep the text selection while tapping the button
+    document.body.appendChild(hlBar);
+    var w = hlBar.offsetWidth, h = hlBar.offsetHeight;
+    var x = Math.max(8, Math.min(window.innerWidth - w - 8, rect.left + rect.width / 2 - w / 2));
+    var y = rect.top - h - 10; if (y < 8) y = rect.bottom + 10;
+    hlBar.style.left = x + 'px'; hlBar.style.top = y + 'px';
+  }
+  var pendingHl = null;
+  function checkSelection() {
+    var sel = window.getSelection && window.getSelection();
+    if (!sel || sel.isCollapsed || !sel.rangeCount) { if (hlBar && hlBar.getAttribute('data-kind') === 'add') hideHlBar(); return; }
+    var rg = sel.getRangeAt(0), key = null, root = null;
+    Object.keys(HL_AREAS).forEach(function (k) { var el = $(HL_AREAS[k]); if (el && el.contains(rg.commonAncestorContainer)) { key = k; root = el; } });
+    if (!key || !rg.toString().trim()) return;
+    var s0 = offsetIn(root, rg.startContainer, rg.startOffset), e0 = offsetIn(root, rg.endContainer, rg.endOffset);
+    if (s0 < 0 || e0 <= s0) return;
+    pendingHl = { key: key, s: s0, e: e0 };
+    showHlBar(rg.getBoundingClientRect(), '<button data-action="hl-add">' + I.marker + ' Highlight</button>');
+    hlBar.setAttribute('data-kind', 'add');
+  }
+  var selTimer = null;
+  document.addEventListener('selectionchange', function () { if (!$('#stage')) return; clearTimeout(selTimer); selTimer = setTimeout(checkSelection, 350); });
+  document.addEventListener('mouseup', function () { if ($('#stage')) setTimeout(checkSelection, 10); });
+  document.addEventListener('scroll', hideHlBar, true);
+
   /* =================================================================== reference + Desmos (same as the mock) */
   function openReference() {
     var f = function (tex) { return '<div class="rf-f">\\(' + tex + '\\)</div>'; };
@@ -905,10 +988,19 @@
   /* =================================================================== events */
   document.addEventListener('click', function (e) {
     if ($app.classList.contains('map-open') && !e.target.closest('#qmap') && !e.target.closest('[data-action="panel"]')) { closePanel(); if (!e.target.closest('[data-action]')) return; }   // click outside closes the map
+    var mk = e.target.closest && e.target.closest('mark.hl');
+    if (mk && (!window.getSelection() || window.getSelection().isCollapsed)) {
+      showHlBar(mk.getBoundingClientRect(), '<button data-action="hl-del" data-k="' + mk.getAttribute('data-k') + '" data-i="' + mk.getAttribute('data-i') + '">' + I.close + ' Remove highlight</button>');
+      return;
+    }
+    if (hlBar && !e.target.closest('.hl-bar')) hideHlBar();
     var t = e.target.closest('[data-action]'); if (!t) return;
     var a = t.getAttribute('data-action');
     switch (a) {
       case 'layer-close': closeLayer(); break;
+      case 'hl-add': if (pendingHl) { addHl(pendingHl.key, pendingHl.s, pendingHl.e); pendingHl = null; try { window.getSelection().removeAllRanges(); } catch (x) { } } hideHlBar(); break;
+      case 'hl-del': removeHl(t.getAttribute('data-k'), +t.getAttribute('data-i')); hideHlBar(); break;
+      case 'hl-help': toast('Select any words in the passage or the question, then tap “Highlight”. Tap a highlight to remove it.', 'info', 5000); break;
       case 'theme': toggleTheme(); break;
       case 'go': closeLayer(); if (!P.user) return screenWelcome(); startPractice(); break;
       case 'home': e.preventDefault(); goHome(); break;
@@ -928,6 +1020,7 @@
       case 'panel': togglePanel(); break;
       case 'goto': goTo(+t.getAttribute('data-n')); break;
       case 'fd': var k = t.getAttribute('data-d'); P.f.d[k] = P.f.d[k] ? 0 : 1; if (!P.f.d.E && !P.f.d.M && !P.f.d.H) P.f.d[k] = 1; save(); paintMap(); paintBottom(); break;
+      case 'ftoggle': showFilters = !showFilters; paintMap(); break;
       case 'fclear': P.f = { d: { E: 1, M: 1, H: 1 }, st: 'all', sk: '' }; save(); paintMap(); paintBottom(); break;
       case 'choose': choose(t.getAttribute('data-letter')); break;
       case 'strike': strike(t.getAttribute('data-letter')); break;
