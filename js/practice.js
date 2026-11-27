@@ -53,8 +53,8 @@
       del: function (k) { delete mem[k]; try { if (ok) localStorage.removeItem(k); } catch (e) { } }
     };
   })();
-  // Night mode: remembered per device; the first visit follows the phone/laptop setting.
-  function theme() { var t = Store.get('isatprep:theme'); if (t === 'dark' || t === 'light') return t; try { return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; } catch (e) { return 'light'; } }
+  // Night mode: off by default, remembered per device once a student turns it on.
+  function theme() { var t = Store.get('isatprep:theme'); return t === 'dark' ? 'dark' : 'light'; }
   function applyTheme() { var t = theme(); document.documentElement.setAttribute('data-theme', t); var m = document.querySelector('meta[name="theme-color"]'); if (m) m.setAttribute('content', t === 'dark' ? '#0f131c' : '#ffffff'); }
   function toggleTheme() {
     Store.set('isatprep:theme', theme() === 'dark' ? 'light' : 'dark'); applyTheme();
@@ -551,9 +551,9 @@
   function paintBottom() {
     var sec = P.sec, list = filtered(sec), cur = P.cur[sec], bb = $('#bb'); if (!bb) return;
     var pos = 0; list.forEach(function (q, i) { if (q.n === cur) pos = i + 1; });
-    var label = P.f.st !== 'all' || P.f.sk || !(P.f.d.E && P.f.d.M && P.f.d.H) ? (pos ? pos + ' of ' + list.length + ' in list' : 'Not in this list') : 'Question ' + cur + ' of ' + qs(sec).length;
-    bb.innerHTML = '<div class="bb-left"><span class="who">' + esc(P.user ? P.user.name : '') + '</span></div>' +
-      '<div class="bb-center"><button class="qnav-btn" data-action="panel" aria-haspopup="dialog" aria-label="Open the question map"><span>' + label + '</span>' + I.chevUp + '</button></div>' +
+    var label = P.f.st !== 'all' || P.f.sk || !(P.f.d.E && P.f.d.M && P.f.d.H) ? (pos ? pos + ' of ' + list.length + ' (filtered)' : 'Not in list') : cur + ' of ' + qs(sec).length;
+    bb.innerHTML = '<div class="bb-left"><button class="qnav-btn map-btn" data-action="panel" aria-haspopup="dialog" aria-label="Open the question map"><span>' + label + '</span>' + I.chevUp + '</button></div>' +
+      '<div class="bb-center"><span class="who">' + esc(P.user ? P.user.name : '') + '</span></div>' +
       '<div class="bb-right"><button class="btn ghost" data-action="back">' + I.chevLeft + '<span>Back</span></button><button class="btn primary" data-action="next"><span>Next</span>' + I.chevRight + '</button></div>' +
       '<div class="bb-progress" aria-hidden="true"><i style="width:' + pct(doneCount(sec), qs(sec).length) + '%"></i></div>';
   }
@@ -870,6 +870,8 @@
      Select text in the passage or the question → "Highlight". Tap a highlight → "Remove".
      Saved per question as character ranges of the rendered text, so they come back after a reload. */
   var HL_AREAS = { p: '.passage-pane .passage', q: '#qPane .prompt' };
+  var HL_COLORS = [['y', 'Yellow'], ['g', 'Green'], ['p', 'Pink']];
+  function swatches(act, extra) { return HL_COLORS.map(function (c) { return '<button class="sw sw-' + c[0] + '" data-action="' + act + '" data-c="' + c[0] + '"' + (extra || '') + ' aria-label="' + c[1] + ' highlight" title="' + c[1] + '"></button>'; }).join(''); }
   function hlRanges(key) { var q = curQ(), r = q && P.at[P.sec + ':' + q.n]; return (r && r.hl && r.hl[key]) || []; }
   function hlTextNodes(root) {
     var out = [], w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null), n;
@@ -895,19 +897,29 @@
         if (to <= from || !node.nodeValue.slice(from, to).trim()) return;
         var mid = node; if (from > 0) mid = node.splitText(from);
         if (to - from < mid.nodeValue.length) mid.splitText(to - from);
-        var mk = document.createElement('mark'); mk.className = 'hl'; mk.setAttribute('data-k', key); mk.setAttribute('data-i', idx);
+        var mk = document.createElement('mark'); mk.className = 'hl hl-' + (rg[2] || 'y'); mk.setAttribute('data-k', key); mk.setAttribute('data-i', idx);
         mid.parentNode.replaceChild(mk, mid); mk.appendChild(mid);
       });
     });
   }
   function paintAllHl() { Object.keys(HL_AREAS).forEach(paintHl); }
-  function addHl(key, s0, e0) {
-    var q = curQ(), r = rec(P.sec, q.n, true);
-    r.hl = r.hl || {}; var list = (r.hl[key] || []).concat([[s0, e0]]).sort(function (x, y) { return x[0] - y[0]; });
+  // A new highlight replaces whatever it overlaps; touching ranges of the same colour join up.
+  function addHl(key, s0, e0, c) {
+    var q = curQ(), r = rec(P.sec, q.n, true); r.hl = r.hl || {};
+    var out = [];
+    (r.hl[key] || []).forEach(function (x) {
+      var col = x[2] || 'y';
+      if (x[1] <= s0 || x[0] >= e0) { out.push([x[0], x[1], col]); return; }
+      if (x[0] < s0) out.push([x[0], s0, col]);
+      if (x[1] > e0) out.push([e0, x[1], col]);
+    });
+    out.push([s0, e0, c || 'y']);
+    out.sort(function (a, b) { return a[0] - b[0]; });
     var merged = [];
-    list.forEach(function (x) { var last = merged[merged.length - 1]; if (last && x[0] <= last[1]) last[1] = Math.max(last[1], x[1]); else merged.push([x[0], x[1]]); });
+    out.forEach(function (x) { var l = merged[merged.length - 1]; if (l && l[2] === x[2] && x[0] <= l[1]) l[1] = Math.max(l[1], x[1]); else merged.push(x); });
     r.hl[key] = merged; save(); paintHl(key);
   }
+  function recolorHl(key, idx, c) { var q = curQ(), r = rec(P.sec, q.n, true); if (!r.hl || !r.hl[key] || !r.hl[key][idx]) return; var x = r.hl[key][idx]; addHl(key, x[0], x[1], c); }
   function removeHl(key, idx) {
     var q = curQ(), r = rec(P.sec, q.n, true); if (!r.hl || !r.hl[key]) return;
     r.hl[key].splice(idx, 1); save(); paintHl(key);
@@ -934,7 +946,7 @@
     var s0 = offsetIn(root, rg.startContainer, rg.startOffset), e0 = offsetIn(root, rg.endContainer, rg.endOffset);
     if (s0 < 0 || e0 <= s0) return;
     pendingHl = { key: key, s: s0, e: e0 };
-    showHlBar(rg.getBoundingClientRect(), '<button data-action="hl-add">' + I.marker + ' Highlight</button>');
+    showHlBar(rg.getBoundingClientRect(), '<span class="hl-lbl">' + I.marker + '</span>' + swatches('hl-add'));
     hlBar.setAttribute('data-kind', 'add');
   }
   var selTimer = null;
@@ -990,7 +1002,8 @@
     if ($app.classList.contains('map-open') && !e.target.closest('#qmap') && !e.target.closest('[data-action="panel"]')) { closePanel(); if (!e.target.closest('[data-action]')) return; }   // click outside closes the map
     var mk = e.target.closest && e.target.closest('mark.hl');
     if (mk && (!window.getSelection() || window.getSelection().isCollapsed)) {
-      showHlBar(mk.getBoundingClientRect(), '<button data-action="hl-del" data-k="' + mk.getAttribute('data-k') + '" data-i="' + mk.getAttribute('data-i') + '">' + I.close + ' Remove highlight</button>');
+      var ki = ' data-k="' + mk.getAttribute('data-k') + '" data-i="' + mk.getAttribute('data-i') + '"';
+      showHlBar(mk.getBoundingClientRect(), swatches('hl-color', ki) + '<i class="hl-sep"></i><button class="hl-rm" data-action="hl-del"' + ki + '>' + I.close + ' Remove</button>');
       return;
     }
     if (hlBar && !e.target.closest('.hl-bar')) hideHlBar();
@@ -998,9 +1011,10 @@
     var a = t.getAttribute('data-action');
     switch (a) {
       case 'layer-close': closeLayer(); break;
-      case 'hl-add': if (pendingHl) { addHl(pendingHl.key, pendingHl.s, pendingHl.e); pendingHl = null; try { window.getSelection().removeAllRanges(); } catch (x) { } } hideHlBar(); break;
+      case 'hl-add': if (pendingHl) { addHl(pendingHl.key, pendingHl.s, pendingHl.e, t.getAttribute('data-c')); pendingHl = null; try { window.getSelection().removeAllRanges(); } catch (x) { } } hideHlBar(); break;
       case 'hl-del': removeHl(t.getAttribute('data-k'), +t.getAttribute('data-i')); hideHlBar(); break;
-      case 'hl-help': toast('Select any words in the passage or the question, then tap “Highlight”. Tap a highlight to remove it.', 'info', 5000); break;
+      case 'hl-color': recolorHl(t.getAttribute('data-k'), +t.getAttribute('data-i'), t.getAttribute('data-c')); hideHlBar(); break;
+      case 'hl-help': toast('Select any words in the passage or the question, then pick a colour. Tap a highlight to change its colour or remove it.', 'info', 5000); break;
       case 'theme': toggleTheme(); break;
       case 'go': closeLayer(); if (!P.user) return screenWelcome(); startPractice(); break;
       case 'home': e.preventDefault(); goHome(); break;
