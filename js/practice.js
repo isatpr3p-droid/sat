@@ -94,6 +94,7 @@
     sun: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.9"/><path d="M12 2.5v2.2M12 19.3v2.2M4.6 4.6l1.6 1.6M17.8 17.8l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.6 19.4l1.6-1.6M17.8 6.2l1.6-1.6" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>',
     marker: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 4.5l5 5-8.5 8.5H6v-5z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/><path d="M4 21h16" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>',
     listCheck: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7l1.6 1.6L8.5 5.6M4 15l1.6 1.6 2.9-3" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 7h8M12 15h8" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>',
+    swords: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 17.5L3 6V3h3l11.5 11.5M13 19l6-6M16 16l4 4M19 21l2-2M9.5 6.5L13 3h3v3l-3.5 3.5M5 14l4 4M7 17l-3 3M3 19l2 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
     chevUp: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 15l6-6 6 6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
     chevDown: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
     close: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>',
@@ -223,6 +224,7 @@
         '<span class="field-lbl">Mode</span>' + modes +
         '<button class="btn primary big block" data-action="go">Continue practicing ' + I.chevRight + '</button>' +
         '<button class="btn ghost block" data-action="report">' + I.chart + ' My report</button>' +
+        '<a class="btn ghost block" href="battle.html">' + I.swords + ' Battle a bot</a>' +
         '<p class="fine">' + I.info + '<span>Not ' + esc(u.name.split(' ')[0]) + '? <a href="#" data-action="switch-user">Switch student</a></span></p>' +
         '</div>';
     } else {
@@ -302,7 +304,8 @@
           (sec === 'math' ? '<button class="tool" data-action="calc" aria-pressed="' + (P.ui.calcOpen ? 'true' : 'false') + '">' + I.calc + '<span><b class="full">Calculator</b><b class="short">Calc</b></span></button><button class="tool" data-action="reference">' + I.ref + '<span><b class="full">Reference</b><b class="short">Ref</b></span></button>' : '') +
           '<button class="tool" data-action="hl-help" title="Highlight text">' + I.marker + '<span>Highlight</span></button>' +
           '<button class="tool" data-action="tutor" aria-pressed="false">' + I.bot + '<span><b class="full">AI tutor</b><b class="short">Tutor</b></span></button>' +
-          '<button class="tool" data-action="report">' + I.chart + '<span>Report</span></button>' + themeBtn('tool theme-tool') +
+          '<button class="tool" data-action="report">' + I.chart + '<span>Report</span></button>' +
+          '<a class="tool" href="battle.html" title="1v1 battle">' + I.swords + '<span>Battle</span></a>' + themeBtn('tool theme-tool') +
         '</div>' +
       '</header>' +
       '<div class="tb-rule" aria-hidden="true"></div>' +

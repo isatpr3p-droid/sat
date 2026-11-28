@@ -351,3 +351,5 @@ html[data-theme="dark"] .qm-title, html[data-theme="dark"] .qm-legend { color: v
 html[data-theme="dark"] .qm-head { border-bottom-color: #2a303d; }
 html[data-theme="dark"] .qm-ftog[aria-pressed="true"] { background: #1f2546 !important; color: #a9b2ff; }
 html[data-theme="dark"] .tile.cur { box-shadow: 0 0 0 1.5px #171c27, 0 0 0 3.5px #e8ebf2; }
+
+a.tool { text-decoration: none; }
