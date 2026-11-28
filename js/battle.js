@@ -14,7 +14,11 @@
   var BANK_VER = (document.querySelector('meta[name="bank-version"]') || {}).content || '1';
   var QS = location.search;
   var PREVIEW = /[?&]preview=1/.test(QS);
-  var ONLINE = !!CFG.battleOnline;              // true once the Supabase backend is live
+  // Online battles run on Supabase (CFG.supabaseUrl / supabaseKey). CFG.battleOnline switches them on for everyone;
+  // ?online=1 switches them on just for this visit (for testing before going live).
+  var ONLINE = !!(CFG.battleOnline || /[?&]online=1/.test(QS)) && !!CFG.supabaseUrl && !!CFG.supabaseKey;
+  var SLOT = (QS.match(/[?&]slot=([A-Za-z0-9]{1,8})/) || [])[1] || '';   // testing: ?slot=2 = a second player in the same browser
+  var KSUF = SLOT ? ':' + SLOT : '';
   var DEMO = PREVIEW && !ONLINE;                 // preview: online modes are simulated so the flow can be seen
   var EMPTY = /[?&]empty=1/.test(QS);            // preview: nobody is found (shows the 1.5-minute fallback)
   var FALLBACK_MS = 90000;                       // Quick Match: after 1.5 minutes offer a bot or an invite link
@@ -35,7 +39,7 @@
     legend: { name: 'Legend', level: 'Hard', stars: 3, xp: 40, acc: 0.88, t: [0.25, 0.6], skip: 0, dist: { E: 0.15, M: 0.4, H: 0.45 }, tag: 'Fast and rarely wrong. Good luck.' }
   };
   var ADJ = { E: 0.12, M: 0, H: -0.15 };            // the bot finds easy questions easier, like everyone
-  var KEY = 'isatprep:battle:v1', STATS = 'isatprep:battle:stats', RECENT = 'isatprep:battle:recent', PKEY = 'isatprep:battle:profile';
+  var KEY = 'isatprep:battle:v1' + KSUF, STATS = 'isatprep:battle:stats' + KSUF, RECENT = 'isatprep:battle:recent' + KSUF, PKEY = 'isatprep:battle:profile' + KSUF;
   var KHEX = '3ecfa63da7d6047e8b1b5b694cac2db0bc8f1335bbf514537a0acf2ac2bf13b0';
   var AVATARS = [['🦊', '#ff8a3d'], ['🐼', '#5b6170'], ['🐯', '#f2a516'], ['🦉', '#8a5cf6'], ['🐸', '#22b26b'], ['🐙', '#e8508a'],
     ['🦁', '#d9902b'], ['🐧', '#3f7be8'], ['🐲', '#16a39a'], ['🦄', '#b45cf0'], ['🐺', '#6a7a99'], ['🐨', '#8f9bb3']];
@@ -300,7 +304,7 @@
   var S = getJSON(STATS, {});          // { rookie: {w,l,d}, ... } record against each bot
   if (!P || typeof P !== 'object') {
     P = newProfile();
-    var oldName = cleanNick(Store.get('isatprep:name') || ''); if (oldName.length >= 3) P.nick = oldName;
+    var oldName = SLOT ? '' : cleanNick(Store.get('isatprep:name') || ''); if (oldName.length >= 3) P.nick = oldName;
     Object.keys(BOTS).forEach(function (k) { var r = S[k]; if (r) { P.w += r.w || 0; P.l += r.l || 0; P.d += r.d || 0; } });
     P.battles = P.w + P.l + P.d;
     setJSON(PKEY, P);
@@ -321,6 +325,231 @@
   function oppName() { return B.opp.kind === 'bot' ? BOTS[B.opp.id].name : B.opp.nick; }
   function oppFace(size) { return B.opp.kind === 'bot' ? botFace(B.opp.id, size) : avatar(B.opp.av, size); }
   function meFace(size, cls) { return avatar(P.av, size, cls); }
+
+  /* =================================================================== online (Supabase)
+     Players sign in anonymously the first time they save a battle card (Google/Telegram sign-in can be linked later).
+     Everything goes through the bm_* database functions in supabase/battle.sql, which check answers, time them,
+     score them and update ratings on the server. The page only shows results instantly (checked locally first)
+     and then takes the server's numbers. Answers are sent in order through a small queue that survives a refresh. */
+  var SB_LIB = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.119.0/dist/umd/supabase.js';
+  var NET = { sb: null, loading: null, auth: null, ready: null, me: null, board: {}, scope: 'week' };
+  function noop() { }
+  function sbClient() {
+    if (NET.sb) return Promise.resolve(NET.sb);
+    if (NET.loading) return NET.loading;
+    NET.loading = new Promise(function (res, rej) {
+      var go = function () {
+        try {
+          NET.sb = window.supabase.createClient(CFG.supabaseUrl, CFG.supabaseKey, { auth: { storageKey: 'isatprep-auth' + (SLOT ? '-' + SLOT : ''), persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
+          res(NET.sb);
+        } catch (e) { NET.loading = null; rej(e); }
+      };
+      if (window.supabase && window.supabase.createClient) { go(); return; }
+      var s = document.createElement('script'); s.src = SB_LIB; s.async = true;
+      s.onload = go; s.onerror = function () { NET.loading = null; if (s.parentNode) s.parentNode.removeChild(s); rej(new Error('offline')); };
+      document.head.appendChild(s);
+    });
+    return NET.loading;
+  }
+  var ERR_CODES = ['room_done', 'nick_taken', 'bad_nick', 'room_not_found', 'room_full', 'own_room', 'match_not_found', 'no_profile', 'not_signed_in', 'out_of_order', 'bad_format'];
+  function errCode(e) { var m = String((e && (e.message || e.details || e.hint)) || ''); for (var i = 0; i < ERR_CODES.length; i++) if (m.indexOf(ERR_CODES[i]) !== -1) return ERR_CODES[i]; return m || 'error'; }
+  function rpc(fn, args) {
+    return sbClient().then(function (sb) { return sb.rpc(fn, args || {}); }).then(function (r) {
+      if (r.error) { var e = new Error(errCode(r.error)); e.raw = r.error; throw e; }
+      return r.data;
+    });
+  }
+  // A session (anonymous the first time).
+  function netAuth() {
+    if (NET.auth) return NET.auth;
+    NET.auth = sbClient().then(function (sb) {
+      return sb.auth.getSession().then(function (r) {
+        if (r.data && r.data.session) return r.data.session;
+        return sb.auth.signInAnonymously().then(function (x) { if (x.error) throw new Error(errCode(x.error)); return x.data.session; });
+      });
+    });
+    NET.auth.catch(function () { NET.auth = null; });
+    return NET.auth;
+  }
+  function hasSession() { return sbClient().then(function (sb) { return sb.auth.getSession(); }).then(function (r) { return !!(r.data && r.data.session); }); }
+  // Signed in, with the battle card saved on the server. Resolves to the server profile (null if there is no card yet).
+  function netReady() {
+    if (NET.ready) return NET.ready;
+    NET.ready = netAuth().then(function () { return rpc('bm_me'); }).then(function (me) {
+      if (me) { adoptServer(me); return me; }
+      if (!P.nick) return null;
+      return rpc('bm_save_profile', { p_nick: P.nick, p_av: P.av }).then(function (me2) { adoptServer(me2); pushProgress(); return me2; });
+    });
+    NET.ready.then(function (me) { if (!me) NET.ready = null; }, function () { NET.ready = null; });
+    return NET.ready;
+  }
+  function netSaveNick(nk, av) {
+    return netAuth().then(function () { return rpc('bm_save_profile', { p_nick: nk, p_av: av }); }).then(function (me) {
+      var first = !NET.me; adoptServer(me); NET.ready = Promise.resolve(me); if (first) pushProgress(); return me;
+    });
+  }
+  // The server's card wins for name, avatar and rating; XP/badges come from whichever side has more XP.
+  function adoptServer(me) {
+    NET.me = me;
+    var pr = me.progress || {};
+    if ((pr.xp || 0) > (P.xp || 0)) ['xp', 'w', 'l', 'd', 'battles', 'streak', 'best', 'correct', 'answered', 'fastest', 'bestCombo', 'badges', 'lastWinDay', 'recent'].forEach(function (k) { if (pr[k] != null) P[k] = pr[k]; });
+    P.nick = me.nick; P.av = me.av;
+    P.rating = (me.rw + me.rl + me.rd) > 0 ? me.rating : null;
+    saveP();
+  }
+  function pushProgress() {
+    if (!NET.me) return;
+    var p = {}; Object.keys(P).forEach(function (k) { if (k !== 'rating') p[k] = P[k]; });
+    rpc('bm_sync', { p_progress: p }).catch(noop);
+  }
+  function oppFromMatch(m) { var o = m.opp || {}; return { kind: 'human', nick: o.nick || 'Player', av: o.av || 0, lvl: lvl(o.xp || 0).L, rating: o.ranked ? o.rating : null, match: m }; }
+  function netErrText(e) {
+    var c = e && e.message;
+    return { room_not_found: 'That room doesn’t exist anymore. Ask your friend for a new link.', room_full: 'That room is already full.', room_done: 'That battle is already over. Ask your friend for a new link.', own_room: 'This is your own room link. Send it to a friend!' }[c] ||
+      'Couldn’t connect. Check your internet and try again.';
+  }
+  function bankN(it) {
+    var arr = BANK[it.sec] || [];
+    if (arr[it.n - 1] && arr[it.n - 1].id === it.id) return it.n;
+    for (var i = 0; i < arr.length; i++) if (arr[i].id === it.id) return i + 1;
+    return it.n;
+  }
+  function pendingOpp() { return { pending: true, ms: 0, ok: false, a: null, pts: 0, combo: 0 }; }
+  function blankRound() { return { done: true, a: null, ok: false, pts: 0, ms: 0, combo: 0, bot: pendingOpp() }; }
+
+  // ---- live match: realtime ping + a poll every 2.5 s, both ending in netSync()
+  var watch = { ch: null, iv: null, busy: false, again: false };
+  function netWatch() {
+    netUnwatch();
+    if (!B || !B.net || B.net.final) return;
+    var id = B.net.id;
+    sbClient().then(function (sb) {
+      if (!B || !B.net || B.net.id !== id) return;
+      watch.ch = sb.channel('m-' + id).on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'matches', filter: 'id=eq.' + id }, function () { netSync(); }).subscribe();
+    }).catch(noop);
+    watch.iv = setInterval(netSync, 2500);
+    netSync();
+  }
+  function netUnwatch() {
+    if (watch.iv) clearInterval(watch.iv); watch.iv = null;
+    if (watch.ch && NET.sb) { try { NET.sb.removeChannel(watch.ch); } catch (e) { } }
+    watch.ch = null;
+  }
+  function netSync() {
+    if (!B || !B.net || B.net.final) { netUnwatch(); return; }
+    if (watch.busy) { watch.again = true; return; }
+    watch.busy = true; var id = B.net.id;
+    rpc('bm_match', { p_id: id }).then(function (m) {
+      watch.busy = false;
+      if (B && B.net && B.net.id === id) applyMatch(m);
+      if (watch.again) { watch.again = false; netSync(); }
+    }, function () { watch.busy = false; });
+  }
+  function applyMatch(m) {
+    var N = B.net; if (!N || N.final) return;
+    N.oppN = m.opp_n || 0;
+    var done = m.status === 'done' || m.status === 'cancelled';
+    if (done) for (var k = 0; k < B.list.length; k++) if (!B.rounds[k]) B.rounds[k] = blankRound();
+    (m.my_rounds || []).forEach(function (x) { var r = B.rounds[x.idx]; if (r && r.done) { r.ok = x.ok; r.pts = x.pts; r.ms = x.ms; r.combo = x.combo; } });
+    (m.opp_rounds || []).forEach(fillOpp);
+    var r = B.rounds[B.i], st = $('#botStatus');
+    if (st && r && !r.done && N.oppN > B.i && !st.classList.contains('in')) { st.classList.add('in'); st.innerHTML = oppStatus('in'); sfx('oppIn'); }
+    paintWait(m);
+    if (done) {
+      N.final = { result: m.result || 'd', delta: m.delta, rating: m.rating, forfeit: m.forfeit };
+      B.rounds.forEach(function (x) { if (!x.done) { x.done = true; x.a = null; x.ok = false; x.pts = 0; } });
+      saveB(); netUnwatch();
+      if (B.status === 'live') {
+        if (m.forfeit === 'opp') toast(oppName() + ' left the battle. You win!');
+        finishBattle();
+      }
+    } else saveB();
+  }
+  // The opponent's answer to question idx (only sent once you've answered it yourself).
+  function fillOpp(x) {
+    var r = B.rounds[x.idx]; if (!r) return;
+    var had = r.bot && !r.bot.pending;
+    r.bot = { ms: x.ms, ok: x.ok, a: x.a, pts: x.pts, combo: x.combo };
+    if (!had && x.idx === B.i && r.done && $('#roundBox') && B.status === 'live') {
+      var from = $('#botStatus') || $('.rc-side.opp') || $('#roundBox');
+      floatText('+' + x.pts, from, $('#sbBot'), x.ok ? 'opp' : 'zero');
+      paintAnswer(); paintRound(); renderMath($('#answerArea'));
+      later(paintScore, wait(300));
+    }
+  }
+  // ---- answers and "question shown" go to the server one at a time, in order
+  var qBusy = false;
+  function netOp(op) { B.net.q.push(op); saveB(); netFlush(); }
+  function netFlush() {
+    if (qBusy || !B || !B.net || !B.net.q || !B.net.q.length) return;
+    qBusy = true; var N = B.net, op = N.q[0];
+    var p = op.op === 'open' ? rpc('bm_open', { p_id: N.id, p_idx: op.idx }) : rpc('bm_answer', { p_id: N.id, p_idx: op.idx, p_answer: op.a == null ? null : String(op.a) });
+    p.then(function (res) {
+      qBusy = false; if (!B || B.net !== N) return;
+      N.q.shift(); if (op.op === 'answer' && res) gotAnswer(res); saveB(); netFlush();
+    }, function (e) {
+      qBusy = false; if (!B || B.net !== N) return;
+      if (e.message === 'out_of_order' || e.message === 'match_not_found') { N.q.shift(); saveB(); netFlush(); return; }   // retrying can't fix these
+      setTimeout(netFlush, 2500);
+    });
+  }
+  function gotAnswer(res) {
+    if (res.closed) { netSync(); return; }
+    var r = B.rounds[res.idx]; if (!r) return;
+    var changed = r.pts !== res.pts || r.ok !== res.ok;
+    r.ok = res.ok; r.pts = res.pts; r.ms = res.ms; r.combo = res.combo;
+    if (changed && res.idx === B.i && $('#roundBox') && r.done) { paintRound(); var a = $('#sbYou'); if (a) a.textContent = totals().y; }
+    if (res.opp) fillOpp(res.opp);
+  }
+  // Waiting for the opponent after your last answer.
+  function screenWaitOpp() {
+    stopTicker(); clearTimers(); closeLayer();
+    $app.className = 'app page battle-page mm-page';
+    $app.innerHTML = '<main class="mm m-' + B.mode + '" id="waitOpp">' +
+      '<button class="mm-cancel" data-action="quit">' + I.close + ' Leave</button>' +
+      '<div class="mm-stage"><div class="radar"><i></i><i></i><i></i><span class="radar-sweep"></span><div class="radar-me">' + oppFace(92) + '</div></div></div>' +
+      '<h1 class="mm-title">Waiting for ' + esc(oppName()) + '</h1>' +
+      '<p class="mm-sub" id="waitTxt">' + waitText(B.net.oppN) + '</p>' +
+      '<div class="mm-timer">' + totals().y + ' pts</div>' +
+      '<p class="mm-fb">Your answers are in. The result shows up as soon as they finish or their time runs out.</p></main>';
+    netWatch();
+    later(function tryFinish() {
+      if (!B || !B.net || B.net.final) return;
+      rpc('bm_finish', { p_id: B.net.id }).then(function (m) { if (B && B.net && !B.net.final) applyMatch(m); }, noop);
+      later(tryFinish, 6000);
+    }, 1200);
+  }
+  function waitText(n) { return n >= B.list.length ? 'They’re done. Adding up the scores…' : 'They’re on question ' + Math.min(n + 1, B.list.length) + ' of ' + B.list.length; }
+  function paintWait(m) { var t = $('#waitTxt'); if (t) t.textContent = waitText(m.opp_n || 0); }
+  function oppIn(r) { return B.net ? (B.net.oppN || 0) > B.i : (now() - B.qStart >= r.bot.ms && r.bot.ms <= limitOf(curItem())); }
+
+  // ---- league table on the hub
+  function loadBoard(scope) {
+    if (!ONLINE) return;
+    rpc('bm_leaderboard', { p_scope: scope }).then(function (b) { NET.board[scope] = b; if (NET.scope === scope && $('#lb')) $('#lb').innerHTML = boardHTML(); }, function () {
+      if (NET.scope === scope && $('#lb') && !NET.board[scope]) $('#lb').innerHTML = '<p class="hp-empty">Couldn’t load the league right now.</p>';
+    });
+  }
+  function boardHTML() {
+    var sc = NET.scope, b = NET.board[sc];
+    if (!b) return '<p class="hp-empty">Loading the league…</p>';
+    if (!b.top.length) return '<p class="hp-empty">' + (sc === 'week' ? 'No Quick Match wins yet this week. Be the first on the board!' : 'No ranked players yet. Win a Quick Match to be the first!') + '</p>';
+    var mine = P.nick, inTop = false;
+    var rows = b.top.slice(0, 10).map(function (x) {
+      var me = mine && x.nick === mine; if (me) inTop = true;
+      return '<div class="lb-row' + (me ? ' me' : '') + '"><span class="lb-pos p' + x.pos + '">' + x.pos + '</span>' + avatar(x.av, 28) + '<b>' + esc(x.nick) + '</b>' +
+        (x.ranked ? rankBadge(rankOf(x.rating), 18) : '') + '<span class="lb-pts">' + (sc === 'week' ? x.pts + ' pts' : x.rating) + '</span></div>';
+    }).join('');
+    if (!inTop && b.me && b.me.pos) rows += '<div class="lb-row me sep"><span class="lb-pos">' + b.me.pos + '</span>' + meFace(28) + '<b>' + esc(nickOr()) + '</b><span class="lb-pts">' + (sc === 'week' ? b.me.pts + ' pts' : b.me.pts) + '</span></div>';
+    return '<div class="lb-rows">' + rows + '</div>' + (sc === 'week' ? '<p class="lb-note">Quick Match win = 3 pts, draw = 1. A new league starts every Monday.</p>' : '');
+  }
+  function leagueHTML() {
+    return '<div class="hpanel league"><div class="hp-head"><h3>' + I.trophy + ' League</h3><div class="lb-tabs">' +
+      '<button class="lbt' + (NET.scope === 'week' ? ' on' : '') + '" data-action="lb" data-id="week">This week</button>' +
+      '<button class="lbt' + (NET.scope === 'all' ? ' on' : '') + '" data-action="lb" data-id="all">All-time</button></div></div>' +
+      '<div class="lb" id="lb">' + boardHTML() + '</div>' +
+      '<button class="link-btn" data-action="ranks">How ranks work ' + I.chevRight + '</button></div>';
+  }
 
   // Pick questions: the opponent's level sets the difficulty mix; questions seen in recent battles are skipped.
   function pickQuestions(fmtId, botId) {
@@ -401,10 +630,11 @@
           (open ? '<span class="mode-cta">Play ' + I.chevRight + '</span>' : '<span class="mode-soon">' + I.lock + ' Soon</span>') + '</button>';
       }).join('') + '</section>' +
       '<section class="hub-grid">' +
-        '<div class="hpanel league"><div class="hp-head"><h3>' + I.trophy + ' Weekly league</h3><span class="chip-soft">' + (ONLINE ? 'Live' : 'Opens with online battles') + '</span></div>' +
+        (ONLINE ? leagueHTML() :
+        '<div class="hpanel league"><div class="hp-head"><h3>' + I.trophy + ' Weekly league</h3><span class="chip-soft">Opens with online battles</span></div>' +
           '<p class="hp-p">Every Quick Match win earns league points. The top players each week get a crown on their card.</p>' +
           '<div class="ladder">' + RANKS.map(function (r) { return '<span class="ld" title="' + r.name + '">' + rankBadge(r, 30) + '<small>' + r.name + '</small></span>'; }).join('') + '</div>' +
-          '<button class="link-btn" data-action="ranks">How ranks work ' + I.chevRight + '</button></div>' +
+          '<button class="link-btn" data-action="ranks">How ranks work ' + I.chevRight + '</button></div>') +
         '<div class="hpanel"><div class="hp-head"><h3>' + I.star + ' Badges</h3><span class="chip-soft">' + nb + ' / ' + BADGES.length + '</span></div><div class="bdg-grid">' +
           BADGES.map(function (b) { var got = P.badges && P.badges[b[0]]; return '<span class="bdg' + (got ? ' got' : '') + '" title="' + esc(b[2] + ': ' + b[3]) + '"><i>' + b[1] + '</i><small>' + b[2] + '</small></span>'; }).join('') + '</div></div>' +
         '<div class="hpanel"><div class="hp-head"><h3>' + I.swords + ' Recent battles</h3></div>' +
@@ -421,6 +651,7 @@
       '</ul></details>' +
       '<footer class="foot">Unofficial practice. SAT® is a trademark of College Board, which is not affiliated with this site.</footer>' +
       '</main>';
+    if (ONLINE) loadBoard(NET.scope);
   }
   function stat(v, l) { return '<div class="st"><b>' + v + '</b><small>' + l + '</small></div>'; }
   function lvRing(lv) {
@@ -430,24 +661,38 @@
 
   /* --------------------------------------------------------------- profile + ranks */
   var afterProfile = null, pfAv = 0;
-  function openProfile(after, first) {
+  function openProfile(after, first, err) {
     afterProfile = after || null; pfAv = P.av || 0;
     modal({ title: first ? 'Create your battle card' : 'Your battle card', cls: 'narrow pf-modal',
       body: '<div class="pf-top"><span id="pfPrev">' + avatar(pfAv, 72) + '</span><div><b id="pfNickPrev">' + esc(P.nick || 'Your name') + '</b><small>Level ' + lvl(P.xp).L + '</small></div></div>' +
         '<label class="field"><span>Nickname</span><input id="pfNick" type="text" maxlength="16" autocomplete="nickname" spellcheck="false" placeholder="e.g. Aziza_07" value="' + esc(P.nick) + '"></label>' +
         '<p class="field-err" id="pfErr" hidden></p>' +
         '<span class="field-lbl">Avatar</span><div class="pf-avs">' + AVATARS.map(function (a, i) { return '<button type="button" class="pf-av' + (i === pfAv ? ' on' : '') + '" data-action="pf-av" data-i="' + i + '" aria-label="Avatar ' + (i + 1) + '">' + avatar(i, 40) + '</button>'; }).join('') + '</div>' +
-        '<p class="fine pf-note">' + I.info + '<span>3–16 letters or numbers. Other players see this name in online battles. Signing in with Telegram or Google comes with online battles, so your level and badges can follow you to any device.</span></p>',
+        '<p class="fine pf-note">' + I.info + '<span>3–16 letters or numbers. Other players see this name in online battles. ' + (ONLINE ? 'Your card is saved to your account in this browser. Google and Telegram sign-in are coming, so it can follow you to other devices.' : 'Signing in with Telegram or Google comes with online battles, so your level and badges can follow you to any device.') + '</span></p>',
       actions: [{ label: first ? 'Let’s go ' + I.chevRight : 'Save', action: 'pf-save', kind: 'primary' }] });
     var inp = $('#pfNick');
     inp.addEventListener('input', function () { $('#pfNickPrev').textContent = cleanNick(inp.value) || 'Your name'; });
     inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); saveProfile(); } });
+    if (err) { var er0 = $('#pfErr'); er0.textContent = err; er0.hidden = false; }
     setTimeout(function () { try { inp.focus(); } catch (e) { } }, 60);
   }
+  var NICK_TAKEN = 'That nickname is taken. Try another one.';
   function saveProfile() {
-    var inp = $('#pfNick'), nk = cleanNick(inp ? inp.value : '');
-    if (nk.length < 3) { var er = $('#pfErr'); er.textContent = 'Pick a nickname with at least 3 letters or numbers.'; er.hidden = false; if (inp) inp.focus(); sfx('bad'); return; }
-    P.nick = nk; P.av = pfAv; saveP(); Store.set('isatprep:name', nk); sfx('pick'); closeLayer();
+    var inp = $('#pfNick'), nk = cleanNick(inp ? inp.value : ''), er = $('#pfErr');
+    if (nk.length < 3) { er.textContent = 'Pick a nickname with at least 3 letters or numbers.'; er.hidden = false; if (inp) inp.focus(); sfx('bad'); return; }
+    if (ONLINE) {
+      var btn = $('[data-action="pf-save"]'); if (btn) { if (btn.disabled) return; btn.disabled = true; }
+      netSaveNick(nk, pfAv).then(function () { profileSaved(nk); }, function (e) {
+        if (btn) btn.disabled = false;
+        if (e.message === 'nick_taken' || e.message === 'bad_nick') { er.textContent = e.message === 'nick_taken' ? NICK_TAKEN : 'Use only letters, numbers, spaces, dots and underscores.'; er.hidden = false; sfx('bad'); if (inp) inp.focus(); return; }
+        profileSaved(nk);        // offline: kept on this device and saved online next time
+      });
+      return;
+    }
+    profileSaved(nk);
+  }
+  function profileSaved(nk) {
+    P.nick = nk; P.av = pfAv; saveP(); if (!SLOT) Store.set('isatprep:name', nk); sfx('pick'); closeLayer();
     var f = afterProfile; afterProfile = null;
     if (f) f(); else screenHub();
   }
@@ -466,6 +711,18 @@
       toast(id === 'quick' ? 'Quick Match opens soon. Battle a bot for now!' : 'Friend battles open soon. Battle a bot for now!'); return;
     }
     if (!P.nick) { openProfile(function () { pickMode(id, $('.mode[data-id="' + id + '"]') || card); }, true); return; }
+    if (MODES[id].online && ONLINE && !NET.me) {
+      if (card) card.classList.add('busy');
+      netReady().then(function () {
+        if (card) card.classList.remove('busy');
+        if (NET.me) pickMode(id, $('.mode[data-id="' + id + '"]') || card);
+      }, function (e) {
+        if (card) card.classList.remove('busy');
+        if (e.message === 'nick_taken') openProfile(function () { pickMode(id, $('.mode[data-id="' + id + '"]') || card); }, false, NICK_TAKEN);
+        else toast(netErrText(e));
+      });
+      return;
+    }
     if (B && B.status === 'live') {
       modal({ title: 'Start a new battle?', cls: 'narrow', body: '<p>Your battle against <b>' + esc(oppName()) + '</b> isn’t finished. Starting a new one ends it without a result.</p>', actions: [{ label: 'Continue old battle', action: 'resume' }, { label: 'Start new battle', action: 'drop-go', kind: 'primary' }] });
       flow.pendingMode = id; return;
@@ -540,13 +797,23 @@
   }
   // Quick Match. The real version asks the server for a player near your rating; the preview fakes one.
   function findHuman(cb) {
-    if (DEMO && !EMPTY) { later(function () { cb(demoPlayer()); }, wait(Math.round(rnd(3200, 6000)))); }
     later(fallback, FALLBACK_MS);
+    if (DEMO) { if (!EMPTY) later(function () { cb(demoPlayer()); }, wait(Math.round(rnd(3200, 6000)))); return; }
+    var fmt = flow.fmt, my = mm;
+    my.stop = function () { if (my.stopped) return; my.stopped = true; if (!my.found) rpc('bm_leave_queue').catch(noop); };
+    (function poll() {
+      if (my.stopped || mm !== my || my.found) return;
+      rpc('bm_queue', { p_fmt: fmt }).then(function (m) {
+        if (!m) { later(poll, 2000); return; }
+        if (my.stopped || mm !== my) { rpc('bm_forfeit', { p_id: m.id }).catch(noop); return; }
+        cb(oppFromMatch(m));
+      }, function () { later(poll, 4000); });
+    })();
   }
   function demoPlayer() { return { kind: 'human', nick: pick(DEMO_NICKS), av: Math.floor(Math.random() * AVATARS.length), lvl: Math.floor(rnd(2, 16)), as: 'ace' }; }
   function fallback() {
     if (!mm || mm.found || !$('#mmExtra')) return;
-    sfx('bad'); clearInterval(mm.iv);
+    sfx('bad'); clearInterval(mm.iv); if (mm.stop) mm.stop();
     $('#mmTitle').textContent = 'No one’s online right now';
     $('.radar') && $('.radar').classList.add('idle');
     $('#mmExtra').innerHTML = '<p class="mm-fb">Battle a bot while you wait, or send a friend an invite link.</p><div class="mm-fb-acts"><button class="gbtn" data-action="fb-bot">' + I.robot + ' Play a bot</button><button class="gbtn white" data-action="fb-friend">' + I.link + ' Invite a friend</button></div><button class="link-btn" data-action="fb-again">Keep searching ' + I.redo + '</button>';
@@ -559,7 +826,8 @@
     stage.innerHTML = '<div class="roll"><div class="roll-me">' + meFace(84) + '<b>' + esc(nickOr()) + '</b></div><span class="roll-vs">VS</span><div class="roll-slot" id="rollSlot"><div class="roll-card" id="rollCard"></div></div></div>';
     $('#mmTitle').textContent = isBot ? 'Opponent ready' : 'Opponent found!';
     var faces = isBot ? Object.keys(BOTS).map(function (k) { return { html: botFace(k, 84), name: BOTS[k].name }; })
-      : DEMO_NICKS.map(function (n, i) { return { html: avatar((i * 5) % AVATARS.length, 84), name: n }; });
+      : DEMO ? DEMO_NICKS.map(function (n, i) { return { html: avatar((i * 5) % AVATARS.length, 84), name: n }; })
+      : AVATARS.map(function (a, i) { return { html: avatar(i, 84), name: '???' }; });
     var final = isBot ? { html: botFace(opp.id, 84), name: BOTS[opp.id].name } : { html: avatar(opp.av, 84), name: opp.nick };
     var gaps = RM ? [] : [55, 60, 65, 70, 80, 90, 105, 120, 140, 165, 195, 230], k = 0, card = $('#rollCard');
     (function spin() {
@@ -568,7 +836,7 @@
         var f = faces[(k * 7 + 3) % faces.length]; card.innerHTML = f.html + '<b>' + esc(f.name) + '</b>'; card.classList.remove('tick'); void card.offsetWidth; card.classList.add('tick'); sfx('roll');
         later(spin, gaps[k++]);
       } else {
-        card.innerHTML = final.html + '<b>' + esc(final.name) + '</b>' + (isBot ? '<small>' + BOTS[opp.id].level + ' bot</small>' : '<small>Level ' + opp.lvl + '</small>');
+        card.innerHTML = final.html + '<b>' + esc(final.name) + '</b>' + (isBot ? '<small>' + BOTS[opp.id].level + ' bot</small>' : '<small>' + humanSub(opp) + '</small>');
         card.classList.remove('tick'); card.classList.add('land'); $('#rollSlot').classList.add('locked'); sfx('found');
         mm.rolled = true; later(maybeFound, wait(900));
       }
@@ -580,14 +848,23 @@
     var opp = mm.found; mm = null;
     startBattle(opp);
   }
-  function cancelSearch() { if (mm) clearInterval(mm.iv); mm = null; clearTimers(); sfx('tap'); screenHub(); }
+  function stopSearch() { if (mm) { clearInterval(mm.iv); if (mm.stop) mm.stop(); } mm = null; }
+  function cancelSearch() {
+    stopSearch(); clearTimers(); sfx('tap');
+    if (flow.roomId) { rpc('bm_cancel_room', { p_id: flow.roomId }).catch(noop); flow.roomId = null; }
+    screenHub();
+  }
+  function humanSub(opp) { return 'Level ' + opp.lvl + (opp.rating ? ' · ' + rankOf(opp.rating).name : ''); }
 
   /* --------------------------------------------------------------- friend invite */
+  function roomUrl(code) { return location.origin + location.pathname + '?room=' + code + (SLOT ? '&slot=' + (SLOT === '2' ? '3' : '2') : '') + (ONLINE && !CFG.battleOnline ? '&online=1' : ''); }
   function screenInvite() {
     clearTimers(); closeLayer();
-    var code = ''; for (var i = 0; i < 5; i++) code += 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'.charAt(Math.floor(Math.random() * 32));
-    flow.room = code;
-    var url = location.origin + location.pathname + '?room=' + code, f = FORMATS[flow.fmt];
+    var f = FORMATS[flow.fmt], code = '';
+    if (ONLINE) code = '·····';
+    else for (var i = 0; i < 5; i++) code += 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'.charAt(Math.floor(Math.random() * 32));
+    flow.room = code; flow.roomId = null;
+    var url = roomUrl(code);
     var tg = 'https://t.me/share/url?url=' + encodeURIComponent(url) + '&text=' + encodeURIComponent('⚔️ 1v1 me in isatprep Battle Mode (' + f.name + '). Tap to join!');
     $app.className = 'app page battle-page mm-page';
     $app.innerHTML = '<main class="mm m-friend invite">' +
@@ -595,16 +872,65 @@
       '<h1 class="mm-title">Challenge a friend</h1><p class="mm-sub">' + f.name + ' · ' + f.blurb + ' · the battle starts when they join</p>' +
       '<div class="inv-slots"><div class="islot me">' + meFace(84) + '<b>' + esc(nickOr()) + '</b><small>Ready</small></div><span class="roll-vs">VS</span>' +
         '<div class="islot wait" id="friendSlot"><span class="islot-q">?</span><b>Waiting…</b><small>Share the link</small></div></div>' +
-      '<div class="inv-code"><small>Room code</small><b>' + code.split('').map(function (ch) { return '<i>' + ch + '</i>'; }).join('') + '</b></div>' +
-      '<div class="inv-link"><code id="invUrl">' + esc(url.replace(/^https?:\/\//, '')) + '</code></div>' +
-      '<div class="inv-acts"><a class="gbtn tg" href="' + tg + '" target="_blank" rel="noopener">' + I.tg + ' Share on Telegram</a><button class="gbtn white" data-action="copy-link" data-url="' + esc(url) + '">' + I.copy + ' Copy link</button></div>' +
+      '<div class="inv-code"><small>Room code</small><b id="invCode">' + code.split('').map(function (ch) { return '<i>' + ch + '</i>'; }).join('') + '</b></div>' +
+      '<div class="inv-link"><code id="invUrl">' + (ONLINE ? 'Creating your room…' : esc(url.replace(/^https?:\/\//, ''))) + '</code></div>' +
+      '<div class="inv-acts' + (ONLINE ? ' wait' : '') + '" id="invActs"><a class="gbtn tg" id="invTg" href="' + tg + '" target="_blank" rel="noopener">' + I.tg + ' Share on Telegram</a><button class="gbtn white" id="invCopy" data-action="copy-link" data-url="' + esc(url) + '">' + I.copy + ' Copy link</button></div>' +
       '</main>';
+    if (ONLINE) openRoom(f);
     if (DEMO && !EMPTY) later(function () { friendJoined({ kind: 'human', nick: pick(DEMO_NICKS), av: Math.floor(Math.random() * AVATARS.length), lvl: Math.floor(rnd(2, 16)), as: 'ace' }); }, wait(6000));
     loadBanks(f.mix.map(function (m) { return m[0]; }), function () { });
   }
+  function openRoom(f) {
+    netReady().then(function () { return rpc('bm_create_room', { p_fmt: flow.fmt }); }).then(function (m) {
+      if (!$('#friendSlot')) { rpc('bm_cancel_room', { p_id: m.id }).catch(noop); return; }
+      flow.roomId = m.id; flow.room = m.code;
+      var url = roomUrl(m.code);
+      $('#invCode').innerHTML = m.code.split('').map(function (ch) { return '<i>' + ch + '</i>'; }).join('');
+      $('#invUrl').textContent = url.replace(/^https?:\/\//, '');
+      $('#invTg').href = 'https://t.me/share/url?url=' + encodeURIComponent(url) + '&text=' + encodeURIComponent('⚔️ 1v1 me in isatprep Battle Mode (' + f.name + '). Tap to join!');
+      $('#invCopy').setAttribute('data-url', url); $('#invActs').classList.remove('wait'); sfx('pick');
+      later(function check() {
+        if (!$('#friendSlot') || flow.roomId !== m.id) return;
+        rpc('bm_match', { p_id: m.id }).then(function (v) {
+          if (!$('#friendSlot') || flow.roomId !== m.id) return;
+          if (v.status === 'live' && v.opp) { flow.roomId = null; friendJoined(oppFromMatch(v)); }
+          else if (v.status === 'waiting') later(check, 2000);
+        }, function () { later(check, 4000); });
+      }, 2000);
+    }, function (e) {
+      if (!$('#friendSlot')) return;
+      if (e.message === 'nick_taken') { openProfile(function () { screenInvite(); }, false, NICK_TAKEN); return; }
+      $('#invUrl').textContent = netErrText(e);
+    });
+  }
+  // Opening a friend's ?room= link
+  function joinRoom(code) {
+    if (!P.nick) { openProfile(function () { joinRoom(code); }, true); return; }
+    clearTimers(); closeLayer();
+    $app.className = 'app page battle-page mm-page';
+    $app.innerHTML = '<main class="mm m-friend invite">' +
+      '<button class="mm-cancel" data-action="hub">' + I.close + ' Cancel</button>' +
+      '<h1 class="mm-title" id="mmTitle">Joining room ' + esc(code) + '…</h1><p class="mm-sub" id="joinSub">Connecting</p>' +
+      '<div class="inv-slots"><div class="islot wait" id="hostSlot"><span class="islot-q">?</span><b>Your friend</b><small>…</small></div><span class="roll-vs">VS</span>' +
+        '<div class="islot me">' + meFace(84) + '<b>' + esc(nickOr()) + '</b><small>Ready</small></div></div></main>';
+    netReady().then(function () { return rpc('bm_join_room', { p_code: code }); }).then(function (m) {
+      if (!$('#hostSlot')) { rpc('bm_forfeit', { p_id: m.id }).catch(noop); return; }
+      flow.mode = 'friend'; flow.fmt = m.fmt;
+      var opp = oppFromMatch(m), f = FORMATS[m.fmt], slot = $('#hostSlot');
+      slot.className = 'islot joined'; slot.innerHTML = avatar(opp.av, 84) + '<b>' + esc(opp.nick) + '</b><small>' + humanSub(opp) + '</small>';
+      $('#mmTitle').textContent = 'You joined ' + opp.nick + '’s room!'; $('#joinSub').textContent = f.name + ' · ' + f.blurb; sfx('found');
+      loadBanks(f.mix.map(function (x) { return x[0]; }), function (ok) {
+        if (!ok) { toast('Couldn’t load the questions. Check your connection.'); return; }
+        later(function () { startBattle(opp); }, wait(1400));
+      });
+    }, function (e) {
+      if (e.message === 'nick_taken') { openProfile(function () { joinRoom(code); }, false, NICK_TAKEN); return; }
+      toast(netErrText(e)); screenHub();
+    });
+  }
   function friendJoined(opp) {
     var slot = $('#friendSlot'); if (!slot) return;
-    slot.className = 'islot joined'; slot.innerHTML = avatar(opp.av, 84) + '<b>' + esc(opp.nick) + '</b><small>Level ' + opp.lvl + ' · joined!</small>'; sfx('found');
+    slot.className = 'islot joined'; slot.innerHTML = avatar(opp.av, 84) + '<b>' + esc(opp.nick) + '</b><small>' + humanSub(opp) + ' · joined!</small>'; sfx('found');
     later(function () { var f = FORMATS[flow.fmt]; loadBanks(f.mix.map(function (m) { return m[0]; }), function (ok) { if (ok) startBattle(opp); }); }, wait(1400));
   }
   function copyLink(url, btn) {
@@ -614,16 +940,26 @@
 
   /* --------------------------------------------------------------- start + VS */
   function startBattle(opp) {
-    var behave = opp.kind === 'bot' ? opp.id : (opp.as || 'ace');
-    var list = pickQuestions(flow.fmt, behave);
-    B = { v: 2, mode: flow.mode, fmt: flow.fmt, bot: behave, opp: opp, list: list, i: 0, rounds: [], status: 'live', startedAt: now(), qStart: 0, seen: false };
+    var m = opp.match, list;
+    if (m) {
+      delete opp.match;
+      list = m.items.map(function (it) { return { sec: it.sec, n: bankN(it), id: it.id }; });
+      B = { v: 2, mode: m.kind, fmt: m.fmt, bot: null, opp: opp, list: list, i: 0, rounds: [], status: 'live', startedAt: now(), qStart: 0, seen: false,
+        net: { id: m.id, side: m.side, oppN: m.opp_n || 0, q: [], final: null } };
+    } else {
+      var behave = opp.kind === 'bot' ? opp.id : (opp.as || 'ace');
+      list = pickQuestions(flow.fmt, behave);
+      B = { v: 2, mode: flow.mode, fmt: flow.fmt, bot: behave, opp: opp, list: list, i: 0, rounds: [], status: 'live', startedAt: now(), qStart: 0, seen: false };
+    }
     var recent = getJSON(RECENT, []).concat(list.map(function (it) { return qOf(it).id; })).slice(-150); setJSON(RECENT, recent);
-    saveB(); screenVS(beginQuestion);
+    saveB();
+    if (B.net) netWatch();
+    screenVS(beginQuestion);
   }
   function screenVS(cb) {
     clearTimers(); closeLayer();
     var lv = lvl(P.xp), rk = P.rating ? rankOf(P.rating) : null;
-    var oppSub = B.opp.kind === 'bot' ? BOTS[B.opp.id].level + ' bot' : 'Level ' + B.opp.lvl;
+    var oppSub = B.opp.kind === 'bot' ? BOTS[B.opp.id].level + ' bot' : humanSub(B.opp);
     $app.className = 'app page battle-page vs-page';
     $app.innerHTML = '<main class="vs2" id="vs2">' +
       '<div class="vs2-half you"><div class="vs2-card">' + meFace(116, 'big') + '<b>' + esc(nickOr()) + '</b><small>Level ' + lv.L + ' · ' + (rk ? rk.name : 'Unranked') + '</small></div></div>' +
@@ -649,6 +985,13 @@
   var view = { ticker: null, pending: null, revealTimer: null, calcOpen: false, lastSec: -1 };
   function curItem() { return B.list[B.i]; }
   function beginQuestion() {
+    if (B.net) {
+      B.qStart = now();
+      B.rounds[B.i] = { done: false, a: null, ok: false, pts: 0, ms: 0, combo: 0, bot: pendingOpp() };
+      saveB(); view.pending = null; screenBattle();
+      netOp({ op: 'open', idx: B.i });
+      return;
+    }
     var it = curItem(), q = qOf(it), lim = limitOf(it);
     B.qStart = now();
     var bot = botAttempt(B.bot, it.sec, q, lim);
@@ -660,7 +1003,7 @@
     saveB(); view.pending = null; screenBattle();
   }
   function dotsHTML(who) {
-    return '<div class="sb-dots ' + who + '">' + B.list.map(function (x, k) { var rr = B.rounds[k], ok = rr && rr.done ? (who === 'me' ? rr.ok : rr.bot.ok) : null; return '<i class="' + (k === B.i && who === 'me' ? 'cur ' : '') + (ok === null ? '' : ok ? 'ok' : 'bad') + '"></i>'; }).join('') + '</div>';
+    return '<div class="sb-dots ' + who + '">' + B.list.map(function (x, k) { var rr = B.rounds[k], ok = rr && rr.done && (who === 'me' || !rr.bot.pending) ? (who === 'me' ? rr.ok : rr.bot.ok) : null; return '<i class="' + (k === B.i && who === 'me' ? 'cur ' : '') + (ok === null ? '' : ok ? 'ok' : 'bad') + '"></i>'; }).join('') + '</div>';
   }
   function share(tt) { var s = tt.y + tt.b; return s ? Math.max(8, Math.min(92, tt.y / s * 100)) : 50; }
   function screenBattle() {
@@ -724,17 +1067,18 @@
   function paintRound() {
     var it = curItem(), q = qOf(it), r = B.rounds[B.i], box = $('#roundBox'), on = esc(oppName());
     if (!r.done) {
-      var botIn = now() - B.qStart >= r.bot.ms && r.bot.ms <= limitOf(it);
+      var botIn = oppIn(r);
       box.innerHTML = '<div class="lock-row"><button class="gbtn lock-btn" id="lockBtn" data-action="lock">' + I.check + ' Lock in answer</button>' +
         '<span class="bot-status' + (botIn ? ' in' : '') + '" id="botStatus">' + oppStatus(botIn ? 'in' : 'think') + '</span></div>';
       paintLock(); return;
     }
     var last = B.i === B.list.length - 1;
     var you = r.a == null ? '<span class="rr-res to">' + I.clock + ' No answer</span>' : r.ok ? '<span class="rr-res ok">' + I.check + ' Correct</span>' : '<span class="rr-res bad">' + I.cross + ' Wrong</span>';
-    var bres = r.bot.ms > limitOf(it) ? '<span class="rr-res to">' + I.clock + ' No answer</span>' : r.bot.ok ? '<span class="rr-res ok">' + I.check + ' Correct</span>' : '<span class="rr-res bad">' + I.cross + ' Wrong</span>';
+    var pend = !!r.bot.pending, oppLate = !pend && (B.net ? r.bot.a == null : r.bot.ms > limitOf(it));
+    var bres = pend ? '<span class="rr-res wait">' + (B.net && B.net.final ? 'No answer' : 'Answering<i class="dots"><b></b><b></b><b></b></i>') + '</span>' : oppLate ? '<span class="rr-res to">' + I.clock + ' No answer</span>' : r.bot.ok ? '<span class="rr-res ok">' + I.check + ' Correct</span>' : '<span class="rr-res bad">' + I.cross + ' Wrong</span>';
     box.innerHTML = '<div class="round-card">' +
       '<div class="rc-side' + (r.ok ? ' ok' : ' bad') + '">' + meFace(32) + '<div><small>You · ' + (r.a == null ? 'time ran out' : fmtS(r.ms)) + '</small>' + you + (r.combo >= 2 ? '<span class="rc-combo">🔥 ×' + r.combo + '</span>' : '') + '</div><b class="rc-pts">+' + r.pts + '</b></div>' +
-      '<div class="rc-side' + (r.bot.ok ? ' ok' : ' bad') + '">' + oppFace(32) + '<div><small>' + on + ' · ' + (r.bot.ms > limitOf(it) ? 'time ran out' : fmtS(r.bot.ms)) + '</small>' + bres + (r.bot.combo >= 2 ? '<span class="rc-combo">🔥 ×' + r.bot.combo + '</span>' : '') + '</div><b class="rc-pts">+' + r.bot.pts + '</b></div>' +
+      '<div class="rc-side opp' + (pend ? ' wait' : r.bot.ok ? ' ok' : ' bad') + '">' + oppFace(32) + '<div><small>' + on + (pend ? '' : ' · ' + (oppLate ? 'time ran out' : fmtS(r.bot.ms))) + '</small>' + bres + (r.bot.combo >= 2 ? '<span class="rc-combo">🔥 ×' + r.bot.combo + '</span>' : '') + '</div><b class="rc-pts">' + (pend ? '…' : '+' + r.bot.pts) + '</b></div>' +
       '</div>' +
       (view.showX ? '<div class="explain"><b>' + I.spark + ' Explanation</b><div>' + q.x + '</div></div>' : '') +
       '<div class="fb-actions">' + (view.showX ? '' : '<button class="btn ghost" data-action="show-x">' + I.spark + ' Show explanation</button>') +
@@ -763,11 +1107,12 @@
       sfx(r.ok ? 'ok' : 'bad'); if (!r.ok) buzz(60);
       if (r.combo >= 2) later(function () { sfx('combo'); }, 180);
       floatText('+' + r.pts, from, $('#sbYou'), r.ok ? 'ok' : 'zero');
-      later(function () { floatText('+' + r.bot.pts, $('#botStatus') || $('#roundBox'), $('#sbBot'), r.bot.ok ? 'opp' : 'zero'); }, 220);
+      if (!r.bot.pending) later(function () { floatText('+' + r.bot.pts, $('#botStatus') || $('#roundBox'), $('#sbBot'), r.bot.ok ? 'opp' : 'zero'); }, 220);
       later(paintScore, wait(300));
     };
-    // Reveal straight away, even if the opponent hasn't "answered" yet (its time was rolled at the start).
+    // Reveal straight away (checked here first); online, the server's check and timing replace these numbers a moment later.
     saveB(); finish();
+    if (B.net) netOp({ op: 'answer', idx: B.i, a: r.a });
   }
   function paintScore() {
     var tt = totals(), before = totals(B.i), a = $('#sbYou'), b = $('#sbBot'), r = B.rounds[B.i];
@@ -777,7 +1122,7 @@
     if (fill) fill.style.width = w + '%'; if (knot) { knot.style.left = w + '%'; knot.classList.remove('jolt'); void knot.offsetWidth; knot.classList.add('jolt'); }
     var dots = $$('.sb-dots.me i'), bdots = $$('.sb-dots.opp i');
     if (dots[B.i]) dots[B.i].className = 'cur ' + (r.ok ? 'ok' : 'bad');
-    if (bdots[B.i]) bdots[B.i].className = r.bot.ok ? 'ok' : 'bad';
+    if (bdots[B.i] && !r.bot.pending) bdots[B.i].className = r.bot.ok ? 'ok' : 'bad';
     var cm = $('#comboMe'), co = $('#comboOpp'), side = $('.tug-side.me');
     if (cm) { cm.textContent = r.combo >= 2 ? '🔥×' + r.combo : ''; if (r.combo >= 2) { cm.classList.remove('pop'); void cm.offsetWidth; cm.classList.add('pop'); } }
     if (co) { co.textContent = r.bot.combo >= 2 ? '🔥×' + r.bot.combo : ''; if (r.bot.combo >= 2) { co.classList.remove('pop'); void co.offsetWidth; co.classList.add('pop'); } }
@@ -802,7 +1147,7 @@
     if (r.done) return stopTicker();
     if (left <= 5000 && left > 0 && secs !== view.lastSec) { view.lastSec = secs; sfx('tick'); }
     var st = $('#botStatus');
-    if (st && !st.classList.contains('in') && now() - B.qStart >= r.bot.ms && r.bot.ms <= lim) {
+    if (st && !st.classList.contains('in') && oppIn(r)) {
       st.classList.add('in'); st.innerHTML = oppStatus('in'); sfx('oppIn');
     }
     if (left <= 0) lockIn(true);
@@ -810,12 +1155,15 @@
 
   /* =================================================================== results + rewards */
   function finishBattle() {
-    var tt = totals(), res = tt.y > tt.b ? 'w' : tt.y < tt.b ? 'l' : 'd';
+    if (B.net && !B.net.final) { screenWaitOpp(); return; }
+    if (B.net) for (var k = 0; k < B.list.length; k++) if (!B.rounds[k]) B.rounds[k] = blankRound();
+    var tt = totals(), res = B.net ? B.net.final.result : tt.y > tt.b ? 'w' : tt.y < tt.b ? 'l' : 'd';
     if (B.status !== 'done') {
       B.status = 'done'; B.result = res; B.endedAt = now();
       if (B.opp.kind === 'bot') { var r = S[B.opp.id] || { w: 0, l: 0, d: 0 }; r[res]++; S[B.opp.id] = r; setJSON(STATS, S); }
+      if (B.net && B.mode === 'quick' && B.net.final.rating) P.rating = B.net.final.rating;
       B.rewards = applyRewards(res, tt);
-      saveB(); saveP();
+      saveB(); saveP(); pushProgress();
     }
     screenResult();
   }
@@ -846,7 +1194,9 @@
     stopTicker(); clearTimers(); closeLayer();
     var tt = totals(), on = oppName(), res = B.result || (tt.y > tt.b ? 'w' : tt.y < tt.b ? 'l' : 'd'), n = B.list.length, rw = B.rewards || { lines: [], total: 0, xp0: P.xp, xp1: P.xp, badges: [] };
     var anim = !B.seen, word = res === 'w' ? 'VICTORY' : res === 'l' ? 'DEFEAT' : 'DRAW';
-    var sub = res === 'w' ? 'You beat ' + esc(on) + '!' + (B.opp.kind === 'bot' && B.opp.id !== 'legend' ? ' Ready for a tougher opponent?' : '') : res === 'l' ? esc(on) + ' won this one. Check the explanations, then take your revenge.' : 'Dead even. Rematch to settle it.';
+    var fin = B.net && B.net.final;
+    var sub = fin && fin.forfeit === 'opp' ? esc(on) + ' left the battle, so the win is yours!' : fin && fin.forfeit === 'me' ? 'You left the battle.' :
+      res === 'w' ? 'You beat ' + esc(on) + '!' + (B.opp.kind === 'bot' && B.opp.id !== 'legend' ? ' Ready for a tougher opponent?' : '') : res === 'l' ? esc(on) + ' won this one. Check the explanations, then take your revenge.' : 'Dead even. Rematch to settle it.';
     var yTime = 0, bTime = 0; B.rounds.forEach(function (r, k) { yTime += r.ms; bTime += Math.min(r.bot.ms, limitOf(B.list[k])); });
     var L0 = lvl(rw.xp0), L1 = lvl(rw.xp1);
     var tgText = (res === 'w' ? '⚔️ I beat ' + on + ' ' + tt.y + '–' + tt.b : res === 'l' ? '⚔️ ' + on + ' beat me ' + tt.b + '–' + tt.y + '. Revenge soon' : '⚔️ ' + tt.y + '–' + tt.y + ' draw vs ' + on) + ' in isatprep Battle Mode (' + FORMATS[B.fmt].name + '). Can you do better?';
@@ -867,7 +1217,7 @@
           '<div class="rw-level"><span class="rw-lv" id="rwLv">Level ' + (anim ? L0.L : L1.L) + '</span><span class="rw-xp" id="rwXp">' + (anim ? L0.into : L1.into) + ' / ' + (anim ? L0.need : L1.need) + ' XP</span></div>' +
           '<div class="xpbar big"><i id="rwBar" style="width:' + pct(anim ? L0.into : L1.into, anim ? L0.need : L1.need) + '%"></i></div>' +
           (rw.badges.length ? '<div class="new-badges"><small>New badge' + (rw.badges.length > 1 ? 's' : '') + '!</small><div>' + rw.badges.map(function (id, i) { var b = BADGES.filter(function (x) { return x[0] === id; })[0]; return '<span class="bdg got nb" style="--i:' + i + '" title="' + esc(b[3]) + '"><i>' + b[1] + '</i><small>' + b[2] + '</small></span>'; }).join('') + '</div></div>' : '') +
-          '<div class="rw-rank">' + rankBadge(P.rating ? rankOf(P.rating) : null, 26) + '<span>' + (B.mode === 'quick' && ONLINE ? 'Rating updated' : B.mode === 'quick' ? 'Ranked rating starts when online battles open.' : 'Unranked battle. Play Quick Match to earn a rank.') + '</span></div>' +
+          '<div class="rw-rank">' + rankBadge(P.rating ? rankOf(P.rating) : null, 26) + '<span>' + (fin && B.mode === 'quick' && fin.rating ? 'Rating <b class="' + (fin.delta >= 0 ? 'okc' : 'badc') + '">' + (fin.delta >= 0 ? '+' : '') + (fin.delta || 0) + '</b> · now ' + fin.rating + ' (' + rankOf(fin.rating).name + ')' : B.mode === 'quick' && !ONLINE ? 'Ranked rating starts when online battles open.' : 'Unranked battle. Play Quick Match to earn a rank.') + '</span></div>' +
         '</section>' +
         '<section class="hpanel"><div class="hp-head"><h3>' + I.trophy + ' Battle stats</h3></div><div class="bstats">' +
           bstat('Correct', tt.yc + '/' + n, tt.bc + '/' + n) + bstat('Avg. time', fmtS(yTime / n), fmtS(bTime / n)) +
@@ -931,12 +1281,24 @@
     loadBanks(Object.keys(secs), function (ok) {
       if (!ok) { $app.innerHTML = '<div class="boot"><p>Couldn’t load the questions.</p><button class="btn primary" onclick="location.reload()">Try again</button></div>'; return; }
       if (B.status === 'done') return screenResult();
+      if (B.net) { netWatch(); netFlush(); if (B.net.final || (B.i >= B.list.length - 1 && B.rounds[B.i] && B.rounds[B.i].done)) return finishBattle(); }
       var r = B.rounds[B.i];
       if (!r || !B.qStart) beginQuestion(); else screenBattle();
     });
   }
+  function quitNet() {
+    if (!B || !B.net || B.net.final || B.status !== 'live') return;
+    netUnwatch();
+    var isQuick = B.mode === 'quick';
+    rpc('bm_forfeit', { p_id: B.net.id }).then(function (m) { if (isQuick && m && m.rating) { P.rating = m.rating; saveP(); if ($('.hub') && !$layer.classList.contains('open')) screenHub(); } pushProgress(); }, noop);
+    var tt = totals();
+    P.l = (P.l || 0) + 1; P.battles = (P.battles || 0) + 1; P.streak = 0;
+    P.recent = [{ res: 'l', opp: oppName(), bot: null, av: B.opp.av, fmt: B.fmt, y: tt.y, b: tt.b, at: now() }].concat(P.recent || []).slice(0, 6);
+    saveP();
+  }
   function rematch() {
     if (!B) return screenHub();
+    if (B.net) { flow.mode = B.mode; flow.fmt = B.fmt; if (B.mode === 'quick') screenSearch(); else screenInvite(); return; }
     flow.mode = B.mode; flow.fmt = B.fmt;
     var opp = B.opp, f = FORMATS[B.fmt];
     loadBanks(f.mix.map(function (m) { return m[0]; }), function (ok) { if (ok) startBattle(opp); });
@@ -1009,8 +1371,9 @@
       case 'back-subj': sfx('tap'); screenSubject(); break;
       case 'hub': sfx('tap'); screenHub(); break;
       case 'cancel-search': cancelSearch(); break;
-      case 'fb-bot': if (mm) clearInterval(mm.iv); mm = null; flow.mode = 'bot'; sfx('pick'); screenOpponent(); break;
-      case 'fb-friend': if (mm) clearInterval(mm.iv); mm = null; flow.mode = 'friend'; sfx('pick'); screenInvite(); break;
+      case 'fb-bot': stopSearch(); flow.mode = 'bot'; sfx('pick'); screenOpponent(); break;
+      case 'fb-friend': stopSearch(); flow.mode = 'friend'; sfx('pick'); screenInvite(); break;
+      case 'lb': NET.scope = t.getAttribute('data-id'); sfx('tap'); $$('.lbt').forEach(function (b) { b.classList.toggle('on', b === t); }); if ($('#lb')) $('#lb').innerHTML = boardHTML(); loadBoard(NET.scope); break;
       case 'fb-again': sfx('tap'); screenSearch(); break;
       case 'copy-link': copyLink(t.getAttribute('data-url'), t); break;
       case 'profile': sfx('tap'); openProfile(null, false); break;
@@ -1028,8 +1391,8 @@
       case 'next-q': nextQuestion(); break;
       case 'calc': toggleCalc(); break;
       case 'reference': openReference(); break;
-      case 'quit': modal({ title: 'Quit this battle?', cls: 'narrow', body: '<p>The battle ends without a result. You get no XP and your record doesn’t change.</p>', actions: [{ label: 'Keep playing', action: 'layer-close' }, { label: 'Quit', action: 'quit-yes', kind: 'primary' }] }); break;
-      case 'quit-yes': closeLayer(); stopTicker(); clearTimeout(view.revealTimer); Store.del(KEY); B = null; screenHub(); break;
+      case 'quit': modal({ title: 'Quit this battle?', cls: 'narrow', body: B && B.net ? '<p>Leaving counts as a <b>loss</b>' + (B.mode === 'quick' ? ' and lowers your rating' : '') + '. ' + esc(oppName()) + ' gets the win.</p>' : '<p>The battle ends without a result. You get no XP and your record doesn’t change.</p>', actions: [{ label: 'Keep playing', action: 'layer-close' }, { label: 'Quit', action: 'quit-yes', kind: 'primary' }] }); break;
+      case 'quit-yes': closeLayer(); stopTicker(); clearTimeout(view.revealTimer); quitNet(); Store.del(KEY); B = null; screenHub(); break;
       case 'rematch': sfx('pick'); rematch(); break;
       case 'open-q': openQuestion(+t.getAttribute('data-k')); break;
     }
@@ -1046,9 +1409,17 @@
   /* =================================================================== boot */
   applyTheme();
   if (PREVIEW) window.__battle = { fallbackNow: fallback, levelUp: levelUp, profile: function () { return P; }, battle: function () { return B; } };
-  if (B && B.status === 'live' && B.list && B.list.length) resumeBattle();
+  var roomCode = (QS.match(/[?&]room=([A-Za-z0-9]{4,8})/) || [])[1];
+  if (roomCode && window.history && history.replaceState) history.replaceState(null, '', location.pathname + QS.replace(/([?&])room=[^&]*&?/, '$1').replace(/[?&]$/, ''));
+  if (B && B.status === 'live' && B.list && B.list.length) { resumeBattle(); if (roomCode) toast('Finish this battle first, then open the room link again.'); }
+  else if (roomCode && ONLINE) { screenHub(); joinRoom(roomCode.toUpperCase()); }
   else {
     screenHub();
-    if (/[?&]room=/.test(QS) && !ONLINE) toast('Friend battles open soon. Battle a bot for now!');
+    if (roomCode) toast('Friend battles open soon. Battle a bot for now!');
   }
+  // Signed in before? Load the card from the account (rating, XP from other devices).
+  if (ONLINE) hasSession().then(function (yes) {
+    if (!yes) return;
+    netReady().then(function () { if ($('.hub') && !$layer.classList.contains('open')) screenHub(); }, noop);
+  }, noop);
 })();

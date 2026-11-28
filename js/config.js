@@ -20,6 +20,12 @@ window.SAT_CONFIG = {
   // Time zone used to show opening/closing times (IANA name).
   timeZone: 'Asia/Tashkent',
 
+  // Battle Mode online battles (Supabase project "isatprep"). The publishable key is meant to be public.
+  // Never put the secret / service_role key here. battleOnline: true opens Quick Match and friend battles for everyone.
+  supabaseUrl: 'https://ahasduqsuindnmvjvjfq.supabase.co',
+  supabaseKey: 'sb_publishable_02k3_ZkAjK6o0vKpXYQwIA_uCvbRBAf',
+  battleOnline: true,
+
   // Score estimate (the real SAT uses an unpublished scoring model).
   scoring: { hardSpan: 600, easySpan: 430, easyCap: 630 }
 };

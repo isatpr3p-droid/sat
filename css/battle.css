@@ -474,3 +474,25 @@ html[data-theme="dark"] .resume-card { border-color: #2c3566; }
 @media (prefers-reduced-motion: reduce) {
   .battle-page *, .battle * { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+/* ===================================================================== online: league table, waiting states */
+.lb-tabs { display: inline-flex; background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 2px; }
+.lbt { border: 0; background: none; font: inherit; font-size: 12px; font-weight: 750; color: var(--muted); padding: 4px 10px; border-radius: 999px; cursor: pointer; white-space: nowrap; }
+.lbt.on { background: var(--panel); color: var(--ink); box-shadow: 0 1px 3px rgba(16, 24, 40, .12); }
+.lb-rows { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+.lb-row { display: flex; align-items: center; gap: 9px; padding: 5px 8px; border-radius: 12px; min-width: 0; animation: cardIn .35s both; }
+.lb-row b { flex: 1; min-width: 0; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lb-row .av { font-size: 15px !important; flex: none; }
+.lb-row.me { background: var(--brand-soft, rgba(67, 82, 232, .09)); }
+.lb-row.sep { margin-top: 4px; border-top: 1px dashed var(--line-2); border-radius: 0 0 12px 12px; }
+.lb-pos { width: 24px; flex: none; text-align: center; font-weight: 850; font-size: 13px; color: var(--muted); }
+.lb-pos.p1 { color: #d9a400; } .lb-pos.p2 { color: #8f9bb3; } .lb-pos.p3 { color: #c97a3a; }
+.lb-pts { font-weight: 800; font-size: 13.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.lb-note { margin: 0 0 6px; font-size: 12px; color: var(--muted); }
+.mode.busy { pointer-events: none; animation: pulseBusy 1s infinite ease-in-out; }
+@keyframes pulseBusy { 50% { opacity: .7; transform: scale(.985); } }
+.inv-acts.wait { opacity: .45; pointer-events: none; }
+.rr-res.wait { color: var(--muted); }
+.rc-side.wait { border-style: dashed; }
+.rw-rank b { font-weight: 850; }
+@media (prefers-reduced-motion: reduce) { .mode.busy { animation: none; opacity: .7; } }
