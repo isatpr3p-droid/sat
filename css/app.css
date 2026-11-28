@@ -1,6 +1,6 @@
 /* isatprep · Daily SAT Mock — styles */
 :root {
-  --build: "600753b009"; /* stamped by build/common.py — app.js reloads once if this doesn't match its own build */
+  --build: "59b130d921"; /* stamped by build/common.py — app.js reloads once if this doesn't match its own build */
   --ink: #141a2b; --ink-2: #3b4459; --muted: #6b7386; --line: #e4e7ee; --line-2: #cfd4de;
   --bg: #f4f5f9; --panel: #ffffff;
   --brand: #4352e8; --brand-ink: #2a33a8; --brand-50: #eef0ff; --brand-100: #dde2ff; --brand-200: #b9c2ff;
@@ -496,6 +496,19 @@ table.data td i { font-family: var(--serif); }
 .explain > b { display: inline-flex; gap: 6px; align-items: center; color: var(--brand-ink); font-size: 14.5px; }
 .explain > b svg { width: 16px; height: 16px; }
 .explain > div { margin-top: 6px; font-size: 16px; }
+
+/* ------------------------------------------------------------------ highlighting (same as Practice Mode) */
+.passage mark.hl, .prompt mark.hl { color: inherit; border-radius: 2px; padding: 1px 0; cursor: pointer; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+mark.hl.hl-y { background: #fde68a; } mark.hl.hl-g { background: #bbf0cf; } mark.hl.hl-p { background: #fbcfe3; }
+.hl-bar { position: fixed; z-index: 60; display: flex; align-items: center; gap: 6px; background: #12151d; border-radius: 10px; padding: 6px 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, .25); }
+.hl-lbl { display: grid; place-items: center; color: #fff; opacity: .8; padding: 0 2px; } .hl-lbl svg { width: 16px; height: 16px; }
+.hl-bar .sw { width: 26px; height: 26px; padding: 0; border-radius: 50%; border: 2px solid rgba(255, 255, 255, .85); cursor: pointer; }
+.hl-bar .sw:hover { transform: scale(1.1); }
+.hl-bar .sw-y { background: #fde68a; } .hl-bar .sw-g { background: #bbf0cf; } .hl-bar .sw-p { background: #fbcfe3; }
+.hl-sep { width: 1px; height: 20px; background: rgba(255, 255, 255, .25); margin: 0 2px; }
+.hl-bar .hl-rm { display: inline-flex; align-items: center; gap: 6px; border: 0; background: none; color: #fff; font: 600 13.5px var(--sans); padding: 5px 9px; border-radius: 7px; cursor: pointer; white-space: nowrap; }
+.hl-bar .hl-rm:hover { background: rgba(255, 255, 255, .12); }
+.hl-bar .hl-rm svg { width: 15px; height: 15px; }
 
 /* ------------------------------------------------------------------ responsive */
 @media (max-width: 1080px) {

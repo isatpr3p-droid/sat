@@ -3,7 +3,7 @@
    so a refresh, a closed tab, or a dead battery never loses answers. Timers use absolute end times. */
 (function () {
   'use strict';
-  var APP_BUILD = '600753b009'; // stamped by build/build.py — must match SATCore.BUILD in core.js
+  var APP_BUILD = '59b130d921'; // stamped by build/build.py — must match SATCore.BUILD in core.js
   var C = window.SATCore;
   var CFG = window.SAT_CONFIG || {};
 
@@ -109,6 +109,7 @@
     spark: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.9 5.6L19.5 10l-5.6 1.9L12 17.5l-1.9-5.6L4.5 10l5.6-1.4z" fill="currentColor"/></svg>',
     shield: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7.5 3v5.5c0 4.6-3.2 8.3-7.5 9.5-4.3-1.2-7.5-4.9-7.5-9.5V6z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/><path d="M8.5 12l2.5 2.5 4.5-5" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>',
     route: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="18" r="2.5" fill="none" stroke="currentColor" stroke-width="1.9"/><circle cx="18" cy="6" r="2.5" fill="none" stroke="currentColor" stroke-width="1.9"/><path d="M8.5 18h6a3.5 3.5 0 0 0 0-7h-5a3.5 3.5 0 0 1 0-7H15.5" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>',
+    marker: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 4.5l5 5-8.5 8.5H6v-5z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/><path d="M4 21h16" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>',
     laptop: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4.5" y="5" width="15" height="10.5" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.9"/><path d="M2.5 19h19" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>'
   };
   function abcIcon(on) {
@@ -612,7 +613,7 @@
     } else {
       stage.innerHTML = '<section class="pane question-pane math-pane" id="qPane"><div class="math-col">' + qhead + '<div class="prompt">' + q.prompt + '</div>' + answerArea + '</div></section>';
     }
-    renderMath(stage);
+    renderMath(stage); paintAllHl(); hideHlBar();
     if (q.type === 'spr') bindSpr(q, m);
     paintBottom();
     $$('.pane', stage).forEach(function (p) { p.scrollTop = 0; });
@@ -934,6 +935,7 @@
       document.body.appendChild(el);
     }
     if (el) el.hidden = !locked;
+    if (locked) hideHlBar();
     if (lockWas === false && locked && S.integrity) { S.integrity.fsExits = (S.integrity.fsExits || 0) + 1; save(); }
     lockWas = need ? locked : null;
   }
@@ -1248,6 +1250,116 @@
     enterStage(o[0], { quiet: true });
   }
 
+
+  /* =================================================================== highlighting (like Bluebook)
+     Select words in the passage or the question → pick a colour. Tap a highlight → change colour or remove it.
+     Saved in the module's attempt state (m.hl[questionId] = { p: [[start, end, colour]], q: [...] }) as character
+     ranges of the rendered text, so highlights survive a reload and "Save and exit". Math (KaTeX/SVG) is never wrapped.
+     Only while a module is running (not on the break, a gate, the review page or after submitting). */
+  var HL_AREAS = { p: '#pPane .passage', q: '#qPane .prompt' };
+  var HL_COLORS = [['y', 'Yellow'], ['g', 'Green'], ['p', 'Pink']];
+  function hlMod() {
+    if (!S || S.status !== 'testing' || S.gate || !S.stage || S.stage === 'break') return null;
+    var m = curMod(); if (!m || m.submittedAt || m.view === 'review') return null;
+    return m;
+  }
+  function hlQ() { var m = hlMod(); return m ? curQs()[m.cur] : null; }
+  function swatches(act, extra) { return HL_COLORS.map(function (c) { return '<button class="sw sw-' + c[0] + '" data-action="' + act + '" data-c="' + c[0] + '"' + (extra || '') + ' aria-label="' + c[1] + ' highlight" title="' + c[1] + '"></button>'; }).join(''); }
+  function hlStore(make) {
+    var m = hlMod(), q = hlQ(); if (!m || !q) return null;
+    if (!m.hl) { if (!make) return null; m.hl = {}; }
+    if (!m.hl[q.id]) { if (!make) return null; m.hl[q.id] = {}; }
+    return m.hl[q.id];
+  }
+  function hlRanges(key) { var h = hlStore(false); return (h && h[key]) || []; }
+  function hlTextNodes(root) {
+    var out = [], w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null), n;
+    while ((n = w.nextNode())) out.push(n);
+    return out;
+  }
+  function inMath(node) { var e = node.parentNode; while (e && e !== document) { if (e.classList && (e.classList.contains('katex') || e.tagName === 'svg')) return true; e = e.parentNode; } return false; }
+  function offsetIn(root, container, off) {
+    var rg = document.createRange(); rg.setStart(root, 0);
+    try { rg.setEnd(container, off); } catch (e) { return -1; }
+    return rg.toString().length;
+  }
+  function paintHl(key) {
+    var root = $(HL_AREAS[key]); if (!root) return;
+    $$('mark.hl', root).forEach(function (mk) { var t = document.createTextNode(mk.textContent); mk.parentNode.replaceChild(t, mk); });
+    root.normalize();
+    hlRanges(key).forEach(function (rg, idx) {
+      var s0 = rg[0], e0 = rg[1], pos = 0;
+      hlTextNodes(root).forEach(function (node) {
+        var len = node.nodeValue.length, a = pos, b = pos + len; pos = b;
+        if (b <= s0 || a >= e0 || inMath(node)) return;
+        var from = Math.max(0, s0 - a), to = Math.min(len, e0 - a);
+        if (to <= from || !node.nodeValue.slice(from, to).trim()) return;
+        var mid = node; if (from > 0) mid = node.splitText(from);
+        if (to - from < mid.nodeValue.length) mid.splitText(to - from);
+        var mk = document.createElement('mark'); mk.className = 'hl hl-' + (rg[2] || 'y'); mk.setAttribute('data-k', key); mk.setAttribute('data-i', idx);
+        mid.parentNode.replaceChild(mk, mid); mk.appendChild(mid);
+      });
+    });
+  }
+  function paintAllHl() { Object.keys(HL_AREAS).forEach(paintHl); }
+  // A new highlight replaces whatever it overlaps; touching ranges of the same colour join up.
+  function addHl(key, s0, e0, c) {
+    var h = hlStore(true); if (!h) return;
+    var out = [];
+    (h[key] || []).forEach(function (x) {
+      var col = x[2] || 'y';
+      if (x[1] <= s0 || x[0] >= e0) { out.push([x[0], x[1], col]); return; }
+      if (x[0] < s0) out.push([x[0], s0, col]);
+      if (x[1] > e0) out.push([e0, x[1], col]);
+    });
+    out.push([s0, e0, c || 'y']);
+    out.sort(function (a, b) { return a[0] - b[0]; });
+    var merged = [];
+    out.forEach(function (x) { var l = merged[merged.length - 1]; if (l && l[2] === x[2] && x[0] <= l[1]) l[1] = Math.max(l[1], x[1]); else merged.push(x); });
+    h[key] = merged; save(); paintHl(key);
+  }
+  function recolorHl(key, idx, c) { var h = hlStore(false); if (!h || !h[key] || !h[key][idx]) return; var x = h[key][idx]; addHl(key, x[0], x[1], c); }
+  function removeHl(key, idx) { var h = hlStore(false); if (!h || !h[key]) return; h[key].splice(idx, 1); save(); paintHl(key); }
+  var hlBar = null, pendingHl = null;
+  function hideHlBar() { if (hlBar) { hlBar.remove(); hlBar = null; } }
+  function showHlBar(rect, html) {
+    hideHlBar();
+    hlBar = document.createElement('div'); hlBar.className = 'hl-bar'; hlBar.innerHTML = html;
+    hlBar.addEventListener('mousedown', function (e) { e.preventDefault(); });   // keep the text selection while tapping a colour
+    document.body.appendChild(hlBar);
+    var w = hlBar.offsetWidth, h = hlBar.offsetHeight;
+    var x = Math.max(8, Math.min(window.innerWidth - w - 8, rect.left + rect.width / 2 - w / 2));
+    var y = rect.top - h - 10; if (y < 8) y = rect.bottom + 10;
+    hlBar.style.left = x + 'px'; hlBar.style.top = y + 'px';
+  }
+  function checkSelection() {
+    if (!hlMod() || ($('#fsLock') && !$('#fsLock').hidden)) { hideHlBar(); return; }
+    var sel = window.getSelection && window.getSelection();
+    if (!sel || sel.isCollapsed || !sel.rangeCount) { if (hlBar && hlBar.getAttribute('data-kind') === 'add') hideHlBar(); return; }
+    var rg = sel.getRangeAt(0), key = null, root = null;
+    Object.keys(HL_AREAS).forEach(function (k) { var el = $(HL_AREAS[k]); if (el && el.contains(rg.commonAncestorContainer)) { key = k; root = el; } });
+    if (!key || !rg.toString().trim()) return;
+    var s0 = offsetIn(root, rg.startContainer, rg.startOffset), e0 = offsetIn(root, rg.endContainer, rg.endOffset);
+    if (s0 < 0 || e0 <= s0) return;
+    pendingHl = { key: key, s: s0, e: e0 };
+    showHlBar(rg.getBoundingClientRect(), '<span class="hl-lbl">' + I.marker + '</span>' + swatches('hl-add'));
+    hlBar.setAttribute('data-kind', 'add');
+  }
+  var selTimer = null;
+  document.addEventListener('selectionchange', function () { if (!$('#stage')) return; clearTimeout(selTimer); selTimer = setTimeout(checkSelection, 350); });
+  document.addEventListener('mouseup', function () { if ($('#stage')) setTimeout(checkSelection, 10); });
+  document.addEventListener('scroll', hideHlBar, true);
+  // Tap on a highlight → colour / remove bar; a click anywhere else closes the bar.
+  document.addEventListener('click', function (e) {
+    var mk = e.target.closest && e.target.closest('mark.hl');
+    if (mk && hlMod() && (!window.getSelection() || window.getSelection().isCollapsed)) {
+      var ki = ' data-k="' + mk.getAttribute('data-k') + '" data-i="' + mk.getAttribute('data-i') + '"';
+      showHlBar(mk.getBoundingClientRect(), swatches('hl-color', ki) + '<i class="hl-sep"></i><button class="hl-rm" data-action="hl-del"' + ki + '>' + I.close + ' Remove</button>');
+      return;
+    }
+    if (hlBar && !(e.target.closest && e.target.closest('.hl-bar'))) hideHlBar();
+  });
+
   /* =================================================================== events */
   document.addEventListener('click', function (e) {
     var t = e.target.closest ? e.target.closest('[data-action]') : null;
@@ -1257,6 +1369,9 @@
     switch (act) {
       case 'noop': e.preventDefault(); break;
       case 'layer-close': closeLayer(); break;
+      case 'hl-add': if (pendingHl) { addHl(pendingHl.key, pendingHl.s, pendingHl.e, t.getAttribute('data-c')); pendingHl = null; try { window.getSelection().removeAllRanges(); } catch (x) { } } hideHlBar(); break;
+      case 'hl-color': recolorHl(t.getAttribute('data-k'), +t.getAttribute('data-i'), t.getAttribute('data-c')); hideHlBar(); break;
+      case 'hl-del': removeHl(t.getAttribute('data-k'), +t.getAttribute('data-i')); hideHlBar(); break;
       case 'begin': if (pendingStart) { var p = pendingStart; pendingStart = null; enterFullscreen(); closeLayer(); startTest(p.name, p.telegram); } break;
       case 'gate-start': startFromGate(); break;
       case 'save-exit': saveAndExit(); break;

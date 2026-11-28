@@ -226,7 +226,7 @@
     return test;
   }
 
-  var BUILD = '600753b009'; // stamped by build/build.py — must match APP_BUILD in app.js
+  var BUILD = '59b130d921'; // stamped by build/build.py — must match APP_BUILD in app.js
 
   var api = {
     BUILD: BUILD, STAGES: STAGES, prepareTest: prepareTest, STAGE_INFO: STAGE_INFO, BREAK_MINUTES: BREAK_MINUTES, SCORING: SCORING,

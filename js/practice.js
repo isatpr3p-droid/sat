@@ -224,7 +224,7 @@
         '<span class="field-lbl">Mode</span>' + modes +
         '<button class="btn primary big block" data-action="go">Continue practicing ' + I.chevRight + '</button>' +
         '<button class="btn ghost block" data-action="report">' + I.chart + ' My report</button>' +
-        '<a class="btn ghost block" href="battle.html">' + I.swords + ' Battle a bot</a>' +
+        '<a class="btn ghost block" href="battle.html">' + I.swords + ' Battle Mode</a>' +
         '<p class="fine">' + I.info + '<span>Not ' + esc(u.name.split(' ')[0]) + '? <a href="#" data-action="switch-user">Switch student</a></span></p>' +
         '</div>';
     } else {
@@ -305,7 +305,7 @@
           '<button class="tool" data-action="hl-help" title="Highlight text">' + I.marker + '<span>Highlight</span></button>' +
           '<button class="tool" data-action="tutor" aria-pressed="false">' + I.bot + '<span><b class="full">AI tutor</b><b class="short">Tutor</b></span></button>' +
           '<button class="tool" data-action="report">' + I.chart + '<span>Report</span></button>' +
-          '<a class="tool" href="battle.html" title="1v1 battle">' + I.swords + '<span>Battle</span></a>' + themeBtn('tool theme-tool') +
+          '<a class="tool" href="battle.html" title="Battle Mode">' + I.swords + '<span>Battle</span></a>' + themeBtn('tool theme-tool') +
         '</div>' +
       '</header>' +
       '<div class="tb-rule" aria-hidden="true"></div>' +

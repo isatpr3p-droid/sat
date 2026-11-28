@@ -1,7 +1,9 @@
-/* isatprep · 1v1 Battle (vs Bot)
+/* isatprep · Battle Mode
+   Hub (player card, XP + level, rank, badges) → mode (Quick Match / Challenge a Friend / vs Bot) → subject → opponent
+   → matchmaking → VS → 3·2·1 → battle (tug-of-war score, combos, live opponent status) → rewards.
    Same look as Practice Mode (css/app.css + css/practice.css + css/battle.css) and the same 355-question bank.
-   Both players get the same questions; the bot "answers" with a speed and accuracy that match its level.
-   Scoring: correct = 100 + up to 50 speed bonus; wrong or no answer = 0. The first answer locks in.
+   Both players get the same questions. Scoring: correct = 100 + up to 50 speed bonus + combo bonus; wrong or no answer = 0.
+   Online modes need the backend (CFG.battleOnline). Until then they show "Soon"; with ?preview=1 they are simulated.
    A battle in progress is saved, so a refresh continues where it stopped (timers use absolute times). */
 (function () {
   'use strict';
@@ -10,24 +12,57 @@
   var BANK = window.PRACTICE_BANK = window.PRACTICE_BANK || {};
   var $app = document.getElementById('app'), $layer = document.getElementById('layer'), $toasts = document.getElementById('toasts');
   var BANK_VER = (document.querySelector('meta[name="bank-version"]') || {}).content || '1';
+  var QS = location.search;
+  var PREVIEW = /[?&]preview=1/.test(QS);
+  var ONLINE = !!CFG.battleOnline;              // true once the Supabase backend is live
+  var DEMO = PREVIEW && !ONLINE;                 // preview: online modes are simulated so the flow can be seen
+  var EMPTY = /[?&]empty=1/.test(QS);            // preview: nobody is found (shows the 1.5-minute fallback)
+  var FALLBACK_MS = 90000;                       // Quick Match: after 1.5 minutes offer a bot or an invite link
+  var RM = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
 
   /* =================================================================== settings */
   var SEC = { rw: { name: 'Reading & Writing', short: 'R&W' }, math: { name: 'Math', short: 'Math' } };
   var DIFF = { E: 'Easy', M: 'Medium', H: 'Hard' };
   var LIMIT = { rw: { E: 50, M: 70, H: 90 }, math: { E: 70, M: 95, H: 120 } };          // seconds per question (same as Rush)
   var FORMATS = {
-    rw: { name: 'Reading & Writing', n: 5, mix: [['rw', 5]], blurb: '5 questions' },
-    math: { name: 'Math', n: 10, mix: [['math', 10]], blurb: '10 questions' },
-    mixed: { name: 'Mixed', n: 8, mix: [['rw', 4], ['math', 4]], blurb: '8 questions · 4 + 4' }
+    rw: { name: 'Reading & Writing', n: 5, mix: [['rw', 5]], blurb: '5 questions', mins: '~5 min' },
+    math: { name: 'Math', n: 10, mix: [['math', 10]], blurb: '10 questions', mins: '~12 min' },
+    mixed: { name: 'Mixed', n: 8, mix: [['rw', 4], ['math', 4]], blurb: '8 questions · 4 + 4', mins: '~9 min' }
   };
   var BOTS = {
-    rookie: { name: 'Rookie', level: 'Easy', acc: 0.55, t: [0.55, 0.95], skip: 0.08, dist: { E: 0.6, M: 0.3, H: 0.1 }, tag: 'Learns fast, still makes mistakes.' },
-    ace: { name: 'Ace', level: 'Medium', acc: 0.72, t: [0.4, 0.8], skip: 0.03, dist: { E: 0.3, M: 0.45, H: 0.25 }, tag: 'Solid and steady. Beat it to prove you’re ready.' },
-    legend: { name: 'Legend', level: 'Hard', acc: 0.88, t: [0.25, 0.6], skip: 0, dist: { E: 0.15, M: 0.4, H: 0.45 }, tag: 'Fast and rarely wrong. Good luck.' }
+    rookie: { name: 'Rookie', level: 'Easy', stars: 1, xp: 20, acc: 0.55, t: [0.55, 0.95], skip: 0.08, dist: { E: 0.6, M: 0.3, H: 0.1 }, tag: 'Learns fast, still makes mistakes.' },
+    ace: { name: 'Ace', level: 'Medium', stars: 2, xp: 30, acc: 0.72, t: [0.4, 0.8], skip: 0.03, dist: { E: 0.3, M: 0.45, H: 0.25 }, tag: 'Solid and steady. Beat it to prove you’re ready.' },
+    legend: { name: 'Legend', level: 'Hard', stars: 3, xp: 40, acc: 0.88, t: [0.25, 0.6], skip: 0, dist: { E: 0.15, M: 0.4, H: 0.45 }, tag: 'Fast and rarely wrong. Good luck.' }
   };
   var ADJ = { E: 0.12, M: 0, H: -0.15 };            // the bot finds easy questions easier, like everyone
-  var KEY = 'isatprep:battle:v1', STATS = 'isatprep:battle:stats', RECENT = 'isatprep:battle:recent';
+  var KEY = 'isatprep:battle:v1', STATS = 'isatprep:battle:stats', RECENT = 'isatprep:battle:recent', PKEY = 'isatprep:battle:profile';
   var KHEX = '3ecfa63da7d6047e8b1b5b694cac2db0bc8f1335bbf514537a0acf2ac2bf13b0';
+  var AVATARS = [['🦊', '#ff8a3d'], ['🐼', '#5b6170'], ['🐯', '#f2a516'], ['🦉', '#8a5cf6'], ['🐸', '#22b26b'], ['🐙', '#e8508a'],
+    ['🦁', '#d9902b'], ['🐧', '#3f7be8'], ['🐲', '#16a39a'], ['🦄', '#b45cf0'], ['🐺', '#6a7a99'], ['🐨', '#8f9bb3']];
+  // Ranks come from the Quick Match rating (everyone starts at 1000).
+  var RANKS = [
+    { id: 'bronze', name: 'Bronze', min: 0, c: '#c98a4b', c2: '#8a5a2b' },
+    { id: 'silver', name: 'Silver', min: 1100, c: '#aab4c5', c2: '#6c778a' },
+    { id: 'gold', name: 'Gold', min: 1250, c: '#f2c230', c2: '#b8860b' },
+    { id: 'diamond', name: 'Diamond', min: 1400, c: '#56cdf5', c2: '#1d8fc4' },
+    { id: 'mythic', name: 'Mythic', min: 1550, c: '#b26cff', c2: '#7a2fd6' },
+    { id: 'legendary', name: 'Legendary', min: 1700, c: '#ff8a2a', c2: '#d1490a' },
+    { id: 'top', name: '1600', min: 1850, c: '#ff4d6d', c2: '#9b1239' }
+  ];
+  var BADGES = [
+    ['first', '🥇', 'First win', 'Win your first battle'],
+    ['streak3', '🔥', 'On fire', 'Win 3 battles in a row'],
+    ['streak10', '☄️', 'Unstoppable', 'Win 10 battles in a row'],
+    ['legend', '👑', 'Legend slayer', 'Beat the Legend bot'],
+    ['perfect', '💯', 'Flawless', 'Win with every answer correct'],
+    ['combo5', '🌪️', 'Combo master', 'Get 5 right in a row in one battle'],
+    ['speed', '⚡', 'Lightning', 'Answer correctly in under 10 seconds'],
+    ['comeback', '🔄', 'Comeback', 'Win after trailing at halftime'],
+    ['b10', '🎖️', 'Regular', 'Play 10 battles'],
+    ['b50', '🏅', 'Veteran', 'Play 50 battles'],
+    ['owl', '🦉', 'Night owl', 'Finish a battle after 11 pm']
+  ];
+  var DEMO_NICKS = ['Aziza_07', 'MathGod', 'bekzod.sat', 'Nilu1500', 'Javo_x', 'Shoxrux', 'Madina.r', 'Timur1490', 'Sevara', 'Diyor_99', 'Kamola', 'Sardor.uz'];
 
   /* =================================================================== utilities */
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
@@ -35,8 +70,11 @@
   function $(sel, el) { return (el || document).querySelector(sel); }
   function $$(sel, el) { return Array.prototype.slice.call((el || document).querySelectorAll(sel)); }
   function rnd(a, b) { return a + Math.random() * (b - a); }
+  function pick(a) { return a[Math.floor(Math.random() * a.length)]; }
   function pct(a, b) { return b ? Math.round(a / b * 100) : 0; }
   function fmtS(ms) { var s = Math.max(0, Math.round(ms / 1000)); return Math.floor(s / 60) + ':' + (s % 60 < 10 ? '0' : '') + s % 60; }
+  function wait(ms) { return RM ? Math.min(ms, 150) : ms; }
+  function dayKey() { var d = new Date(); return d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate(); }
   function renderMath(el) {
     if (!el || !window.renderMathInElement) return;
     try { window.renderMathInElement(el, { delimiters: [{ left: '\\(', right: '\\)', display: false }, { left: '\\[', right: '\\]', display: true }], throwOnError: false, ignoredTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code', 'input'] }); } catch (e) { }
@@ -89,7 +127,17 @@
     book: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/><path d="M4 20.5A2.5 2.5 0 0 1 6.5 18H20v3H6.5" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/></svg>',
     bolt: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2.5L5 13.5h6l-1 8 8-11h-6z" fill="currentColor"/></svg>',
     redo: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 8.5A7.5 7.5 0 1 0 19.5 15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/><path d="M19.5 4v5h-5" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>',
-    info: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.9"/><path d="M12 11v6M12 7.5v.01" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>'
+    info: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.9"/><path d="M12 11v6M12 7.5v.01" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>',
+    link: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 14a4.5 4.5 0 0 0 6.4 0l3-3a4.5 4.5 0 0 0-6.4-6.4l-1.2 1.2M14 10a4.5 4.5 0 0 0-6.4 0l-3 3a4.5 4.5 0 0 0 6.4 6.4l1.2-1.2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+    robot: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="2.8" r="1.4" fill="currentColor"/><rect x="4" y="6.5" width="16" height="13" rx="4" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="9" cy="12.5" r="1.7" fill="currentColor"/><circle cx="15" cy="12.5" r="1.7" fill="currentColor"/><path d="M9.5 16.3h5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M2 11.5v3M22 11.5v3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+    edit: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 5.5l4 4L8 20H4v-4z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/></svg>',
+    sound: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5h4l5-4v13l-5-4H4z" fill="currentColor"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>',
+    mute: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5h4l5-4v13l-5-4H4z" fill="currentColor"/><path d="M16.5 9.5l5 5M21.5 9.5l-5 5" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>',
+    lock: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10.5" width="14" height="10" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.9"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5" fill="none" stroke="currentColor" stroke-width="1.9"/></svg>',
+    tg: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 4.5L2.8 11.4c-.9.4-.9 1.6.1 1.9l4.6 1.5 1.8 5.3c.3.8 1.3 1 1.9.4l2.6-2.4 4.6 3.4c.7.5 1.7.1 1.9-.8L23 5.9c.2-1-.9-1.8-2-1.4zM9.6 14.4l8.6-6.6-6.9 7.6-.3 3.1z" fill="currentColor"/></svg>',
+    copy: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8.5" y="8.5" width="11" height="11" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.9"/><path d="M15.5 8.5V6A1.5 1.5 0 0 0 14 4.5H6A1.5 1.5 0 0 0 4.5 6v8A1.5 1.5 0 0 0 6 15.5h2.5" fill="none" stroke="currentColor" stroke-width="1.9"/></svg>',
+    home: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11l8-6.5 8 6.5v9h-5.5v-5.5h-5V20H4z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/></svg>',
+    star: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.2l2.7 5.6 6.1.8-4.5 4.2 1.1 6.1L12 17l-5.4 2.9 1.1-6.1-4.5-4.2 6.1-.8z" fill="currentColor"/></svg>'
   };
   function botFace(id, size) {
     var c = { rookie: ['#19a974', '#e3f6e8'], ace: ['#e9a21a', '#fdf1cc'], legend: ['#e0484d', '#fbe1e1'] }[id];
@@ -99,12 +147,77 @@
     return '<svg class="bot-face" viewBox="0 0 40 40" width="' + (size || 40) + '" height="' + (size || 40) + '" aria-hidden="true"><rect width="40" height="40" rx="12" fill="' + c[1] + '"/><path d="M20 6v5" stroke="' + c[0] + '" stroke-width="2.4" stroke-linecap="round"/><circle cx="20" cy="5.5" r="2.4" fill="' + c[0] + '"/>' +
       '<rect x="8" y="12" width="24" height="23" rx="7" fill="#fff" stroke="' + c[0] + '" stroke-width="2.4"/>' + eyes + mouth + '</svg>';
   }
-  function youFace(name, size) {
-    var ini = (String(name || 'You').trim().charAt(0) || 'Y').toUpperCase();
-    return '<span class="you-face" style="width:' + (size || 40) + 'px;height:' + (size || 40) + 'px">' + esc(ini) + '</span>';
+  function avatar(av, size, cls) {
+    var a = AVATARS[av] || AVATARS[0], s = size || 40;
+    return '<span class="av' + (cls ? ' ' + cls : '') + '" style="--av:' + a[1] + ';width:' + s + 'px;height:' + s + 'px;font-size:' + Math.round(s * 0.56) + 'px" aria-hidden="true">' + a[0] + '</span>';
+  }
+  function rankOf(rating) { var r = RANKS[0]; RANKS.forEach(function (x) { if (rating >= x.min) r = x; }); return r; }
+  function rankBadge(rank, size) {
+    var s = size || 28;
+    if (!rank) return '<svg class="rank-badge" viewBox="0 0 40 44" width="' + s + '" height="' + Math.round(s * 1.1) + '" aria-hidden="true"><path d="M20 2l16 7v13c0 9.5-7 16-16 20C11 38 4 31.5 4 22V9z" fill="none" stroke="currentColor" stroke-width="2.4" stroke-dasharray="4 3" opacity=".55"/><text x="20" y="27" text-anchor="middle" font-size="15" font-weight="800" fill="currentColor" opacity=".6" font-family="system-ui,sans-serif">?</text></svg>';
+    var gid = 'rg' + rank.id + s;
+    var inner = rank.id === 'top' ? '<text x="20" y="26.5" text-anchor="middle" font-size="10.5" font-weight="900" fill="#fff" font-family="system-ui,sans-serif">1600</text>'
+      : '<path d="M20 12.5l2.4 4.9 5.4.8-3.9 3.8.9 5.4L20 24.9l-4.8 2.5.9-5.4-3.9-3.8 5.4-.8z" fill="#fff" opacity=".95"/>';
+    var pips = ''; var idx = RANKS.indexOf(rank);
+    if (rank.id !== 'top') for (var k = 0; k <= Math.min(idx, 4); k++) pips += '<circle cx="' + (20 - Math.min(idx, 4) * 2.6 + k * 5.2) + '" cy="33" r="1.5" fill="#fff" opacity=".9"/>';
+    return '<svg class="rank-badge" viewBox="0 0 40 44" width="' + s + '" height="' + Math.round(s * 1.1) + '" aria-hidden="true"><defs><linearGradient id="' + gid + '" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="' + rank.c + '"/><stop offset="1" stop-color="' + rank.c2 + '"/></linearGradient></defs>' +
+      '<path d="M20 2l16 7v13c0 9.5-7 16-16 20C11 38 4 31.5 4 22V9z" fill="url(#' + gid + ')" stroke="rgba(255,255,255,.55)" stroke-width="1.5"/>' + inner + pips + '</svg>';
   }
 
-  /* =================================================================== layer / toast */
+  /* =================================================================== sound (WebAudio, no files) */
+  var SND = { on: Store.get('isatprep:battle:sound') !== 'off', ctx: null };
+  function actx() {
+    if (!SND.ctx) { try { SND.ctx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { return null; } }
+    if (SND.ctx.state === 'suspended') { try { SND.ctx.resume(); } catch (e) { } }
+    return SND.ctx;
+  }
+  function tone(f, t0, dur, type, vol, f2) {
+    var c = actx(); if (!c) return;
+    var o = c.createOscillator(), g = c.createGain(), st = c.currentTime + t0;
+    o.type = type || 'sine'; o.frequency.setValueAtTime(f, st); if (f2) o.frequency.exponentialRampToValueAtTime(f2, st + dur);
+    g.gain.setValueAtTime(0.0001, st); g.gain.exponentialRampToValueAtTime(vol || 0.12, st + 0.012); g.gain.exponentialRampToValueAtTime(0.0001, st + dur);
+    o.connect(g); g.connect(c.destination); o.start(st); o.stop(st + dur + 0.05);
+  }
+  function noise(t0, dur, vol, from, to) {
+    var c = actx(); if (!c) return;
+    var len = Math.floor(c.sampleRate * dur), buf = c.createBuffer(1, len, c.sampleRate), d = buf.getChannelData(0);
+    for (var i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    var src = c.createBufferSource(), bp = c.createBiquadFilter(), g = c.createGain(), st = c.currentTime + t0;
+    src.buffer = buf; bp.type = 'bandpass'; bp.Q.value = 1.2; bp.frequency.setValueAtTime(from || 400, st); bp.frequency.exponentialRampToValueAtTime(to || 2400, st + dur);
+    g.gain.setValueAtTime(0.0001, st); g.gain.exponentialRampToValueAtTime(vol || 0.1, st + dur * 0.3); g.gain.exponentialRampToValueAtTime(0.0001, st + dur);
+    src.connect(bp); bp.connect(g); g.connect(c.destination); src.start(st); src.stop(st + dur + 0.05);
+  }
+  var SFX = {
+    tap: function () { tone(520, 0, 0.06, 'triangle', 0.06); },
+    pick: function () { tone(660, 0, 0.08, 'triangle', 0.09); tone(990, 0.06, 0.12, 'triangle', 0.08); },
+    whoosh: function () { noise(0, 0.32, 0.09, 300, 3000); },
+    roll: function () { tone(900 + Math.random() * 300, 0, 0.03, 'square', 0.025); },
+    found: function () { [523, 659, 784, 1047].forEach(function (f, i) { tone(f, i * 0.07, 0.2, 'triangle', 0.1); }); },
+    slam: function () { tone(160, 0, 0.4, 'sawtooth', 0.14, 45); noise(0, 0.28, 0.16, 2000, 200); },
+    count: function () { tone(440, 0, 0.16, 'square', 0.07); },
+    go: function () { tone(880, 0, 0.1, 'square', 0.08); tone(1320, 0.09, 0.32, 'square', 0.08); },
+    tick: function () { tone(1250, 0, 0.035, 'square', 0.03); },
+    oppIn: function () { tone(620, 0, 0.07, 'sine', 0.06); tone(820, 0.05, 0.07, 'sine', 0.05); },
+    lock: function () { tone(330, 0, 0.07, 'triangle', 0.08); tone(495, 0.05, 0.09, 'triangle', 0.07); },
+    ok: function () { tone(784, 0, 0.1, 'sine', 0.13); tone(1175, 0.08, 0.22, 'sine', 0.13); },
+    bad: function () { tone(220, 0, 0.26, 'sawtooth', 0.08, 130); },
+    combo: function () { [880, 1109, 1319].forEach(function (f, i) { tone(f, i * 0.05, 0.12, 'triangle', 0.07); }); },
+    win: function () { [523, 659, 784, 1047].forEach(function (f, i) { tone(f, i * 0.11, 0.24, 'triangle', 0.11); }); [523, 784, 1047].forEach(function (f) { tone(f, 0.48, 0.7, 'triangle', 0.07); }); },
+    lose: function () { [392, 349, 311, 262].forEach(function (f, i) { tone(f, i * 0.16, 0.3, 'triangle', 0.09); }); },
+    draw: function () { tone(523, 0, 0.2, 'triangle', 0.09); tone(523, 0.22, 0.3, 'triangle', 0.09); },
+    xp: function () { tone(1400 + Math.random() * 400, 0, 0.03, 'sine', 0.03); },
+    level: function () { [523, 659, 784, 1047, 1319, 1568].forEach(function (f, i) { tone(f, i * 0.06, 0.25, 'triangle', 0.08); }); },
+    badge: function () { tone(1319, 0, 0.12, 'sine', 0.1); tone(1760, 0.1, 0.3, 'sine', 0.09); }
+  };
+  function sfx(n) { if (!SND.on || !SFX[n]) return; try { SFX[n](); } catch (e) { } }
+  function buzz(p) { try { if (navigator.vibrate) navigator.vibrate(p); } catch (e) { } }
+  function soundBtn() { return '<button class="theme-pill snd-pill" data-action="sound" aria-pressed="' + SND.on + '" aria-label="' + (SND.on ? 'Mute sounds' : 'Turn sounds on') + '">' + (SND.on ? I.sound : I.mute) + '<span>' + (SND.on ? 'Sound' : 'Muted') + '</span></button>'; }
+  function toggleSound() {
+    SND.on = !SND.on; Store.set('isatprep:battle:sound', SND.on ? 'on' : 'off'); if (SND.on) sfx('pick');
+    $$('[data-action="sound"]').forEach(function (b) { b.outerHTML = soundBtn(); });
+  }
+
+  /* =================================================================== layer / toast / fx */
   function openLayer(html) { closeLayer(); $layer.innerHTML = '<div class="scrim" data-action="layer-close"></div>' + html; $layer.classList.add('open'); renderMath($layer); }
   function closeLayer() { if (!$layer.classList.contains('open')) return; $layer.classList.remove('open'); $layer.innerHTML = ''; }
   function modal(o) {
@@ -119,6 +232,43 @@
   }
   function wordmark() {
     return '<span class="wm-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><rect width="32" height="32" rx="9" fill="url(#wmg)"/><defs><linearGradient id="wmg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4f5df0"/><stop offset="1" stop-color="#7a3cf0"/></linearGradient></defs><circle cx="16" cy="9" r="2.6" fill="#fff"/><rect x="13.6" y="13.2" width="4.8" height="11.5" rx="2.4" fill="#fff"/></svg></span><span class="wm-text">' + esc(CFG.brand || 'isatprep') + '</span>';
+  }
+  function brandbar() {
+    return (DEMO ? '<div class="demo-bar"><b>Preview</b> Online modes are simulated here. Nobody else sees this.</div>' : '') +
+      '<header class="brandbar"><a class="wordmark" href="practice.html">' + wordmark() + '</a><div class="rb-actions">' + soundBtn() + themeBtn('theme-pill') + '<a class="btn ghost" href="practice.html">' + I.book + ' Practice</a></div></header>';
+  }
+  // timers that belong to the current screen (cleared when the screen changes)
+  var timers = [];
+  function later(fn, ms) { var id = setTimeout(fn, ms); timers.push(id); return id; }
+  function clearTimers() { timers.forEach(clearTimeout); timers = []; }
+  function countTo(el, from, to, dur, onStep) {
+    if (!el) return; if (RM || dur <= 0) { el.textContent = to; return; }
+    var t0 = performance.now();
+    (function step(t) { var k = Math.min(1, (t - t0) / dur), e = 1 - Math.pow(1 - k, 3), v = Math.round(from + (to - from) * e); if (el.textContent !== String(v) && onStep) onStep(); el.textContent = v; if (k < 1) requestAnimationFrame(step); })(t0);
+  }
+  function floatText(txt, fromEl, toEl, cls) {
+    if (!fromEl || RM) return;
+    var a = fromEl.getBoundingClientRect(), el = document.createElement('span');
+    el.className = 'floatpt ' + (cls || ''); el.textContent = txt; document.body.appendChild(el);
+    var x0 = a.left + a.width / 2, y0 = a.top + Math.min(a.height / 2, 60), x1 = x0, y1 = y0 - 80;
+    if (toEl) { var b = toEl.getBoundingClientRect(); x1 = b.left + b.width / 2; y1 = b.top + b.height / 2; }
+    el.style.left = x0 + 'px'; el.style.top = y0 + 'px';
+    var anim = el.animate([{ transform: 'translate(-50%,-50%) scale(.6)', opacity: 0 }, { transform: 'translate(-50%,-90%) scale(1.25)', opacity: 1, offset: 0.25 },
+      { transform: 'translate(calc(-50% + ' + (x1 - x0) + 'px), calc(-50% + ' + (y1 - y0) + 'px)) scale(.7)', opacity: 0.2 }], { duration: 900, easing: 'cubic-bezier(.4,0,.2,1)' });
+    anim.onfinish = function () { if (el.parentNode) el.parentNode.removeChild(el); };
+  }
+  function confetti(n) {
+    if (RM) return;
+    var cv = document.createElement('canvas'), ctx = cv.getContext('2d'), W = cv.width = window.innerWidth, H = cv.height = window.innerHeight;
+    cv.className = 'confetti'; document.body.appendChild(cv);
+    var cols = ['#4352e8', '#7a3cf0', '#ffb703', '#ff4d6d', '#19c37d', '#38bdf8'], ps = [];
+    for (var i = 0; i < (n || 160); i++) ps.push({ x: W / 2 + rnd(-W * 0.15, W * 0.15), y: H * 0.32, vx: rnd(-9, 9), vy: rnd(-15, -5), s: rnd(5, 10), r: rnd(0, 6), vr: rnd(-0.3, 0.3), c: pick(cols), sh: Math.random() < 0.5 });
+    var t0 = performance.now();
+    (function frame(t) {
+      var el = (t - t0) / 1000; ctx.clearRect(0, 0, W, H);
+      ps.forEach(function (p) { p.vy += 0.38; p.vx *= 0.99; p.x += p.vx; p.y += p.vy; p.r += p.vr; ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.r); ctx.globalAlpha = Math.max(0, 1 - el / 2.8); ctx.fillStyle = p.c; if (p.sh) ctx.fillRect(-p.s / 2, -p.s / 4, p.s, p.s / 2); else { ctx.beginPath(); ctx.arc(0, 0, p.s / 2.6, 0, 7); ctx.fill(); } ctx.restore(); });
+      if (el < 2.9) requestAnimationFrame(frame); else if (cv.parentNode) cv.parentNode.removeChild(cv);
+    })(t0);
   }
 
   /* =================================================================== bank */
@@ -139,17 +289,40 @@
   }
   function qOf(item) { return (BANK[item.sec] || [])[item.n - 1]; }
 
+  /* =================================================================== player profile (this device for now; moves to the account later) */
+  function cleanNick(s) {
+    s = String(s || '').trim().replace(/\s+/g, ' ');
+    try { s = s.replace(/[^\p{L}\p{N}_. -]/gu, ''); } catch (e) { s = s.replace(/[^A-Za-z0-9_. -]/g, ''); }
+    return s.slice(0, 16).trim();
+  }
+  function newProfile() { return { v: 1, nick: '', av: Math.floor(Math.random() * AVATARS.length), xp: 0, w: 0, l: 0, d: 0, battles: 0, streak: 0, best: 0, correct: 0, answered: 0, fastest: 0, bestCombo: 0, badges: {}, lastWinDay: '', recent: [], rating: null }; }
+  var P = getJSON(PKEY, null);
+  var S = getJSON(STATS, {});          // { rookie: {w,l,d}, ... } record against each bot
+  if (!P || typeof P !== 'object') {
+    P = newProfile();
+    var oldName = cleanNick(Store.get('isatprep:name') || ''); if (oldName.length >= 3) P.nick = oldName;
+    Object.keys(BOTS).forEach(function (k) { var r = S[k]; if (r) { P.w += r.w || 0; P.l += r.l || 0; P.d += r.d || 0; } });
+    P.battles = P.w + P.l + P.d;
+    setJSON(PKEY, P);
+  }
+  function saveP() { setJSON(PKEY, P); }
+  function lvl(xp) { var L = 1, need = 100; xp = xp || 0; while (xp >= need) { xp -= need; L++; need = 100 + 50 * (L - 1); } return { L: L, into: xp, need: need }; }
+  function record(id) { return S[id] || { w: 0, l: 0, d: 0 }; }
+  function nickOr() { return P.nick || 'You'; }
+
   /* =================================================================== state */
   var B = getJSON(KEY, null);          // the battle in progress (or just finished)
-  var S = getJSON(STATS, {});          // { rookie: {w,l,d}, ... }
+  if (B && !B.opp && B.bot) { B.opp = { kind: 'bot', id: B.bot }; B.mode = 'bot'; }
   var choice = { fmt: Store.get('isatprep:battle:fmt') || 'mixed', bot: Store.get('isatprep:battle:bot') || 'ace' };
   if (!FORMATS[choice.fmt]) choice.fmt = 'mixed';
   if (!BOTS[choice.bot]) choice.bot = 'ace';
+  var flow = { mode: 'bot', fmt: choice.fmt, bot: choice.bot, opp: null, room: '' };
   function saveB() { setJSON(KEY, B); }
-  function record(id) { var r = S[id] || { w: 0, l: 0, d: 0 }; return r; }
-  function playerName() { return Store.get('isatprep:name') || ''; }
+  function oppName() { return B.opp.kind === 'bot' ? BOTS[B.opp.id].name : B.opp.nick; }
+  function oppFace(size) { return B.opp.kind === 'bot' ? botFace(B.opp.id, size) : avatar(B.opp.av, size); }
+  function meFace(size, cls) { return avatar(P.av, size, cls); }
 
-  // Pick questions: the bot's level sets the difficulty mix; questions seen in recent battles are skipped.
+  // Pick questions: the opponent's level sets the difficulty mix; questions seen in recent battles are skipped.
   function pickQuestions(fmtId, botId) {
     var recent = getJSON(RECENT, []), seen = {}; recent.forEach(function (id) { seen[id] = 1; });
     var dist = BOTS[botId].dist, out = [];
@@ -181,117 +354,326 @@
     return { ms: ms, ok: ok, a: a };
   }
   function points(ok, ms, limitMs) { return ok ? 100 + Math.round(50 * Math.max(0, limitMs - ms) / limitMs) : 0; }
+  // Combo: the 2nd correct answer in a row adds +10, the 3rd +20, then +30 for each one after that.
+  function streakBefore(i, who) { var s = 0; for (var k = i - 1; k >= 0; k--) { var r = B.rounds[k]; if (!r || !(who === 'me' ? r.ok : r.bot.ok)) break; s++; } return s; }
+  function comboBonus(prev) { return Math.min(30, prev * 10); }
   function limitOf(item) { var q = qOf(item); return LIMIT[item.sec][q.d] * 1000; }
-  function totals() {
-    var y = 0, b = 0, yc = 0, bc = 0;
-    (B.rounds || []).forEach(function (r) { if (!r || !r.done) return; y += r.pts; b += r.bot.pts; if (r.ok) yc++; if (r.bot.ok) bc++; });
+  function totals(upTo) {
+    var y = 0, b = 0, yc = 0, bc = 0, end = upTo == null ? (B.rounds || []).length : upTo;
+    (B.rounds || []).forEach(function (r, k) { if (!r || !r.done || k >= end) return; y += r.pts; b += r.bot.pts; if (r.ok) yc++; if (r.bot.ok) bc++; });
     return { y: y, b: b, yc: yc, bc: bc };
   }
 
-  /* =================================================================== start screen */
-  function screenStart() {
-    stopTicker();
-    $app.className = 'app page';
-    var name = playerName(), live = B && B.status === 'live';
-    $app.innerHTML = '<header class="brandbar"><a class="wordmark" href="practice.html">' + wordmark() + '</a><div class="rb-actions">' + themeBtn('theme-pill') + '<a class="btn ghost" href="practice.html">' + I.book + ' Practice</a></div></header>' +
-      '<main class="welcome">' +
-      '<section class="hero">' +
-        '<div class="hero-copy">' +
-          '<div class="eyebrow">' + I.swords + ' 1v1 Battle</div>' +
-          '<h1>Battle a bot</h1>' +
-          '<div class="chips"><span>' + I.bolt + ' Same questions for both</span><span>' + I.clock + ' A timer on every question</span><span>' + I.trophy + ' Speed counts</span></div>' +
-          '<div class="rules-card"><h2>How it works</h2><ol class="rule-list">' +
-            rule(I.swords, 'Pick a subject and an opponent', 'Reading & Writing (5 questions), Math (10) or Mixed (8).') +
-            rule(I.check, 'Your first answer locks in', 'No second tries in a battle. Read carefully, then lock it in.') +
-            rule(I.bolt, 'Correct = 100 + speed bonus', 'Up to 50 extra points for answering fast. Wrong or no answer = 0.') +
-            rule(I.trophy, 'Most points wins', 'See every explanation at the end, then go for a rematch.') +
-          '</ol></div>' +
+  /* =================================================================== hub */
+  var MODES = {
+    quick: { name: 'Quick Match', sub: 'Ranked · real players', ico: I.bolt, online: true, desc: 'Get matched with a player at your level. Wins push your rank up.' },
+    friend: { name: 'Challenge a Friend', sub: 'Invite link · just for fun', ico: I.link, online: true, desc: 'Send a link on Telegram. Same questions, winner takes the bragging rights.' },
+    bot: { name: 'vs Bot', sub: 'Practice · earn XP', ico: I.robot, online: false, desc: 'Rookie, Ace or Legend. Always online, always ready.' }
+  };
+  function modeOpen(id) { return !MODES[id].online || ONLINE || DEMO; }
+  function screenHub() {
+    stopTicker(); clearTimers(); closeLayer();
+    var lv = lvl(P.xp), live = B && B.status === 'live' && B.list, rk = P.rating ? rankOf(P.rating) : null;
+    var played = P.w + P.l + P.d, nb = Object.keys(P.badges || {}).length;
+    $app.className = 'app page battle-page';
+    $app.innerHTML = brandbar() +
+      '<main class="hub">' +
+      (live ? '<div class="resume-card"><div class="rs-l">' + oppFace(40) + '<div><b>Battle in progress</b><span>vs ' + esc(oppName()) + ' · ' + FORMATS[B.fmt].name + ' · question ' + Math.min(B.i + 1, B.list.length) + ' of ' + B.list.length + '</span></div></div><button class="gbtn sm" data-action="resume">Continue ' + I.chevRight + '</button></div>' : '') +
+      '<section class="pcard">' +
+        '<div class="pc-glow" aria-hidden="true"></div>' +
+        '<div class="pc-id">' +
+          '<button class="pc-av" data-action="profile" aria-label="Edit your battle card">' + lvRing(lv) + meFace(78) + '<span class="pc-lvl">' + lv.L + '</span></button>' +
+          '<div class="pc-main"><div class="pc-name">' + (P.nick ? esc(P.nick) : 'New player') + '<button class="pc-edit" data-action="profile" aria-label="Edit name and avatar">' + I.edit + '</button></div>' +
+            '<div class="pc-lv">Level ' + lv.L + ' <span>' + lv.into + ' / ' + lv.need + ' XP</span></div>' +
+            '<div class="xpbar"><i style="width:' + pct(lv.into, lv.need) + '%"></i></div>' +
+            '<button class="pc-rank" data-action="ranks">' + rankBadge(rk, 22) + '<span>' + (rk ? rk.name + ' · ' + P.rating : 'Unranked') + '</span>' + I.chevRight + '</button></div>' +
         '</div>' +
-        '<form class="start-card" id="bForm" novalidate>' +
-          (live ? '<div class="resume-card"><div><b>Battle in progress</b><span>vs ' + BOTS[B.bot].name + ' · ' + FORMATS[B.fmt].name + ' · question ' + Math.min(B.i + 1, B.list.length) + ' of ' + B.list.length + '</span></div><button type="button" class="btn primary" data-action="resume">Continue</button></div>' : '') +
-          '<h2>Set up your battle</h2>' +
-          (name ? '' : '<label class="field"><span>Your name</span><input id="bName" type="text" maxlength="40" autocomplete="name" placeholder="e.g. Aziza"></label>') +
-          '<span class="field-lbl">Subject</span><div class="fmt-pick">' + Object.keys(FORMATS).map(function (id) {
-            var f = FORMATS[id]; return '<button type="button" class="fmt-card' + (choice.fmt === id ? ' on' : '') + '" data-action="pick-fmt" data-id="' + id + '"><b>' + f.name + '</b><small>' + f.blurb + '</small></button>';
-          }).join('') + '</div>' +
-          '<span class="field-lbl">Opponent</span><div class="bot-pick">' + Object.keys(BOTS).map(function (id) {
-            var b = BOTS[id], r = record(id);
-            return '<button type="button" class="bot-card' + (choice.bot === id ? ' on' : '') + '" data-action="pick-bot" data-id="' + id + '">' + botFace(id, 44) +
-              '<span class="bc-txt"><b>' + b.name + ' <em class="lvl ' + id + '">' + b.level + '</em></b><small>' + b.tag + '</small></span>' +
-              '<span class="bc-rec" title="Your record against ' + b.name + '"><b>' + r.w + '–' + r.l + (r.d ? '–' + r.d : '') + '</b><small>W–L</small></span></button>';
-          }).join('') + '</div>' +
-          '<p class="field-err" id="bErr" hidden></p>' +
-          '<button class="btn primary big block" type="submit">' + I.swords + ' Start battle</button>' +
-          '<p class="fine">' + I.info + '<span>Math questions come with the Desmos calculator and the reference sheet, like the real test.</span></p>' +
-        '</form>' +
+        '<div class="pc-stats">' +
+          stat(P.w, 'Wins') + stat(played ? pct(P.w, played) + '%' : '–', 'Win rate') + stat((P.streak >= 2 ? '🔥' : '') + P.streak, 'Win streak') + stat(P.answered ? pct(P.correct, P.answered) + '%' : '–', 'Accuracy') +
+        '</div>' +
       '</section>' +
+      '<div class="hub-h"><h2>Choose your battle</h2>' + (P.lastWinDay !== dayKey() ? '<span class="daily">' + I.spark + ' First win today = double XP</span>' : '') + '</div>' +
+      '<section class="modes">' + Object.keys(MODES).map(function (id, i) {
+        var m = MODES[id], open = modeOpen(id);
+        return '<button class="mode m-' + id + (open ? '' : ' soon') + '" data-action="mode" data-id="' + id + '" style="--i:' + i + '">' +
+          '<span class="mode-art"><span class="mode-ico">' + m.ico + '</span></span>' +
+          '<span class="mode-txt"><b>' + m.name + '</b><small>' + m.sub + '</small><span class="mode-desc">' + m.desc + '</span></span>' +
+          (open ? '<span class="mode-cta">Play ' + I.chevRight + '</span>' : '<span class="mode-soon">' + I.lock + ' Soon</span>') + '</button>';
+      }).join('') + '</section>' +
+      '<section class="hub-grid">' +
+        '<div class="hpanel league"><div class="hp-head"><h3>' + I.trophy + ' Weekly league</h3><span class="chip-soft">' + (ONLINE ? 'Live' : 'Opens with online battles') + '</span></div>' +
+          '<p class="hp-p">Every Quick Match win earns league points. The top players each week get a crown on their card.</p>' +
+          '<div class="ladder">' + RANKS.map(function (r) { return '<span class="ld" title="' + r.name + '">' + rankBadge(r, 30) + '<small>' + r.name + '</small></span>'; }).join('') + '</div>' +
+          '<button class="link-btn" data-action="ranks">How ranks work ' + I.chevRight + '</button></div>' +
+        '<div class="hpanel"><div class="hp-head"><h3>' + I.star + ' Badges</h3><span class="chip-soft">' + nb + ' / ' + BADGES.length + '</span></div><div class="bdg-grid">' +
+          BADGES.map(function (b) { var got = P.badges && P.badges[b[0]]; return '<span class="bdg' + (got ? ' got' : '') + '" title="' + esc(b[2] + ': ' + b[3]) + '"><i>' + b[1] + '</i><small>' + b[2] + '</small></span>'; }).join('') + '</div></div>' +
+        '<div class="hpanel"><div class="hp-head"><h3>' + I.swords + ' Recent battles</h3></div>' +
+          ((P.recent || []).length ? '<div class="recent">' + P.recent.map(function (r) {
+            return '<div class="rc-row"><span class="rc-res ' + r.res + '">' + (r.res === 'w' ? 'W' : r.res === 'l' ? 'L' : 'D') + '</span><span class="rc-face">' + (r.bot ? botFace(r.bot, 26) : avatar(r.av, 26)) + '</span><span class="rc-txt"><b>vs ' + esc(r.opp) + '</b><small>' + esc(FORMATS[r.fmt] ? FORMATS[r.fmt].name : '') + '</small></span><span class="rc-sc">' + r.y + '–' + r.b + '</span></div>';
+          }).join('') + '</div>' : '<p class="hp-empty">Your battles will show up here. Win one to start a streak!</p>') + '</div>' +
+      '</section>' +
+      '<details class="howto"><summary>' + I.info + ' How scoring works</summary><ul>' +
+        '<li><b>Same questions</b> for both players, with a timer on every question.</li>' +
+        '<li><b>Correct = 100 points + up to 50</b> for answering fast. Wrong or no answer = 0. Your first answer locks in.</li>' +
+        '<li><b>Combos:</b> 2 right in a row +10, 3 in a row +20, then +30 each.</li>' +
+        '<li><b>XP:</b> win 20–40 (harder opponents give more), draw 15, loss 8, +2 per correct answer. Your first win each day counts double.</li>' +
+        '<li><b>Rank</b> comes from Quick Match only. Friend and bot battles never change it.</li>' +
+      '</ul></details>' +
       '<footer class="foot">Unofficial practice. SAT® is a trademark of College Board, which is not affiliated with this site.</footer>' +
       '</main>';
-    $('#bForm').addEventListener('submit', function (e) {
-      e.preventDefault();
-      var nIn = $('#bName');
-      if (nIn) { var nm = nIn.value.trim().replace(/\s+/g, ' '); if (nm.length < 2) { var er = $('#bErr'); er.textContent = 'Please enter your name (at least 2 letters).'; er.hidden = false; nIn.focus(); return; } Store.set('isatprep:name', nm.slice(0, 40)); }
-      if (live) { modal({ title: 'Start a new battle?', cls: 'narrow', body: '<p>Your battle against <b>' + BOTS[B.bot].name + '</b> isn’t finished. Starting a new one ends it without a result.</p>', actions: [{ label: 'Continue old battle', action: 'resume' }, { label: 'Start new battle', action: 'start-new', kind: 'primary' }] }); return; }
-      startBattle();
-    });
   }
-  function rule(ic, t, d) { return '<li><span class="rl-ico">' + ic + '</span><div><b>' + t + '</b><p>' + d + '</p></div></li>'; }
+  function stat(v, l) { return '<div class="st"><b>' + v + '</b><small>' + l + '</small></div>'; }
+  function lvRing(lv) {
+    var r = 46, c = 2 * Math.PI * r, k = lv.into / lv.need;
+    return '<svg class="lv-ring" viewBox="0 0 100 100" aria-hidden="true"><circle cx="50" cy="50" r="' + r + '" class="lr-bg"/><circle cx="50" cy="50" r="' + r + '" class="lr-fg" style="stroke-dasharray:' + c + ';stroke-dashoffset:' + c * (1 - k) + '"/></svg>';
+  }
 
-  function startBattle() {
-    closeLayer();
-    var f = FORMATS[choice.fmt], secs = f.mix.map(function (m) { return m[0]; });
-    $app.className = 'app page'; $app.innerHTML = '<div class="boot"><div class="boot-mark"></div><p>Finding questions…</p></div>';
+  /* --------------------------------------------------------------- profile + ranks */
+  var afterProfile = null, pfAv = 0;
+  function openProfile(after, first) {
+    afterProfile = after || null; pfAv = P.av || 0;
+    modal({ title: first ? 'Create your battle card' : 'Your battle card', cls: 'narrow pf-modal',
+      body: '<div class="pf-top"><span id="pfPrev">' + avatar(pfAv, 72) + '</span><div><b id="pfNickPrev">' + esc(P.nick || 'Your name') + '</b><small>Level ' + lvl(P.xp).L + '</small></div></div>' +
+        '<label class="field"><span>Nickname</span><input id="pfNick" type="text" maxlength="16" autocomplete="nickname" spellcheck="false" placeholder="e.g. Aziza_07" value="' + esc(P.nick) + '"></label>' +
+        '<p class="field-err" id="pfErr" hidden></p>' +
+        '<span class="field-lbl">Avatar</span><div class="pf-avs">' + AVATARS.map(function (a, i) { return '<button type="button" class="pf-av' + (i === pfAv ? ' on' : '') + '" data-action="pf-av" data-i="' + i + '" aria-label="Avatar ' + (i + 1) + '">' + avatar(i, 40) + '</button>'; }).join('') + '</div>' +
+        '<p class="fine pf-note">' + I.info + '<span>3–16 letters or numbers. Other players see this name in online battles. Signing in with Telegram or Google comes with online battles, so your level and badges can follow you to any device.</span></p>',
+      actions: [{ label: first ? 'Let’s go ' + I.chevRight : 'Save', action: 'pf-save', kind: 'primary' }] });
+    var inp = $('#pfNick');
+    inp.addEventListener('input', function () { $('#pfNickPrev').textContent = cleanNick(inp.value) || 'Your name'; });
+    inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); saveProfile(); } });
+    setTimeout(function () { try { inp.focus(); } catch (e) { } }, 60);
+  }
+  function saveProfile() {
+    var inp = $('#pfNick'), nk = cleanNick(inp ? inp.value : '');
+    if (nk.length < 3) { var er = $('#pfErr'); er.textContent = 'Pick a nickname with at least 3 letters or numbers.'; er.hidden = false; if (inp) inp.focus(); sfx('bad'); return; }
+    P.nick = nk; P.av = pfAv; saveP(); Store.set('isatprep:name', nk); sfx('pick'); closeLayer();
+    var f = afterProfile; afterProfile = null;
+    if (f) f(); else screenHub();
+  }
+  function openRanks() {
+    modal({ title: 'Ranks', cls: 'narrow',
+      body: '<p class="rk-intro">Your rank comes from <b>Quick Match</b>. Everyone starts at <b>1000</b> rating in Bronze. Beat players to climb. Beating someone stronger gives more, losing to someone weaker costs more.</p>' +
+        '<div class="rk-list">' + RANKS.slice().reverse().map(function (r) { return '<div class="rk-row">' + rankBadge(r, 34) + '<b>' + r.name + '</b><span>' + (r.min ? r.min + '+' : 'Start') + '</span></div>'; }).join('') + '</div>' +
+        '<p class="fine">' + I.info + '<span>Friend battles and bot battles give XP but never change your rank.</span></p>',
+      actions: [{ label: 'Got it', action: 'layer-close', kind: 'primary' }] });
+  }
+
+  /* --------------------------------------------------------------- mode → subject → opponent */
+  function pickMode(id, card) {
+    if (!modeOpen(id)) {
+      sfx('bad'); card.classList.remove('shake'); void card.offsetWidth; card.classList.add('shake');
+      toast(id === 'quick' ? 'Quick Match opens soon. Battle a bot for now!' : 'Friend battles open soon. Battle a bot for now!'); return;
+    }
+    if (!P.nick) { openProfile(function () { pickMode(id, $('.mode[data-id="' + id + '"]') || card); }, true); return; }
+    if (B && B.status === 'live') {
+      modal({ title: 'Start a new battle?', cls: 'narrow', body: '<p>Your battle against <b>' + esc(oppName()) + '</b> isn’t finished. Starting a new one ends it without a result.</p>', actions: [{ label: 'Continue old battle', action: 'resume' }, { label: 'Start new battle', action: 'drop-go', kind: 'primary' }] });
+      flow.pendingMode = id; return;
+    }
+    flow.mode = id; sfx('pick'); sfx('whoosh');
+    if (card) card.classList.add('launch');
+    $$('.mode').forEach(function (m) { if (m !== card) m.classList.add('dim'); });
+    later(screenSubject, wait(320));
+  }
+  function flowTop(step, of) {
+    var m = MODES[flow.mode];
+    return '<div class="flow-top"><button class="back-btn" data-action="' + (step > 1 ? 'back-subj' : 'hub') + '">' + I.chevLeft + ' Back</button><span class="flow-step m-' + flow.mode + '"><i>' + m.ico + '</i>' + m.name + (of > 1 ? ' · step ' + step + ' of ' + of : '') + '</span></div>';
+  }
+  function screenSubject() {
+    clearTimers(); closeLayer();
+    $app.className = 'app page battle-page';
+    var icons = { rw: I.book, math: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 4H7l6 8-6 8h10" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>', mixed: I.bolt };
+    $app.innerHTML = brandbar() + '<main class="flow">' + flowTop(1, flow.mode === 'bot' ? 2 : 1) +
+      '<h1 class="flow-title">Pick your subject</h1><p class="flow-sub">' + (flow.mode === 'quick' ? 'You’ll be matched with someone playing the same subject.' : flow.mode === 'friend' ? 'Your friend gets the same questions.' : 'The bot gets the same questions you do.') + '</p>' +
+      '<div class="subj-grid">' + Object.keys(FORMATS).map(function (id, i) {
+        var f = FORMATS[id];
+        return '<button class="subj s-' + id + (flow.fmt === id ? ' last' : '') + '" data-action="pick-subj" data-id="' + id + '" style="--i:' + i + '"><span class="subj-ico">' + icons[id] + '</span><b>' + f.name + '</b><small>' + f.blurb + '</small><span class="subj-time">' + I.clock + f.mins + '</span>' + (flow.fmt === id ? '<span class="subj-last">Last played</span>' : '') + '</button>';
+      }).join('') + '</div></main>';
+  }
+  function pickSubject(id, tile) {
+    flow.fmt = id; choice.fmt = id; Store.set('isatprep:battle:fmt', id); sfx('pick');
+    $$('.subj').forEach(function (t) { t.classList.add(t === tile ? 'chosen' : 'fade'); });
+    later(function () { if (flow.mode === 'bot') screenOpponent(); else if (flow.mode === 'friend') screenInvite(); else screenSearch(); }, wait(480));
+  }
+  function screenOpponent() {
+    clearTimers(); closeLayer();
+    $app.className = 'app page battle-page';
+    $app.innerHTML = brandbar() + '<main class="flow">' + flowTop(2, 2) +
+      '<h1 class="flow-title">Pick your opponent</h1><p class="flow-sub">' + FORMATS[flow.fmt].name + ' · ' + FORMATS[flow.fmt].blurb + '</p>' +
+      '<div class="opp-grid">' + Object.keys(BOTS).map(function (id, i) {
+        var b = BOTS[id], r = record(id), stars = '';
+        for (var k = 0; k < 3; k++) stars += '<i class="' + (k < b.stars ? 'on' : '') + '">' + I.star + '</i>';
+        return '<button class="oc o-' + id + (flow.bot === id ? ' last' : '') + '" data-action="pick-opp" data-id="' + id + '" style="--i:' + i + '"><span class="opp-face">' + botFace(id, 72) + '</span>' +
+          '<b>' + b.name + '</b><span class="opp-stars" aria-label="' + b.level + '">' + stars + '</span><small>' + b.tag + '</small>' +
+          '<span class="opp-foot"><span class="opp-xp">+' + b.xp + ' XP win</span><span class="opp-rec">' + r.w + 'W · ' + r.l + 'L</span></span></button>';
+      }).join('') + '</div></main>';
+  }
+  function pickOpponent(id, card) {
+    flow.bot = id; choice.bot = id; Store.set('isatprep:battle:bot', id); sfx('pick');
+    $$('.oc').forEach(function (t) { t.classList.add(t === card ? 'chosen' : 'fade'); });
+    later(screenSearch, wait(480));
+  }
+
+  /* --------------------------------------------------------------- matchmaking */
+  var mm = null;
+  function screenSearch() {
+    clearTimers(); closeLayer();
+    var isBot = flow.mode === 'bot', f = FORMATS[flow.fmt];
+    mm = { t0: now(), found: null, banks: false, iv: null };
+    $app.className = 'app page battle-page mm-page';
+    $app.innerHTML = '<main class="mm m-' + flow.mode + '">' +
+      '<button class="mm-cancel" data-action="cancel-search">' + I.close + ' Cancel</button>' +
+      '<div class="mm-stage" id="mmStage"><div class="radar"><i></i><i></i><i></i><span class="radar-sweep"></span><div class="radar-me">' + meFace(92) + '</div></div></div>' +
+      '<h1 class="mm-title" id="mmTitle">' + (isBot ? 'Waking up ' + BOTS[flow.bot].name + '…' : 'Finding an opponent') + '</h1>' +
+      '<p class="mm-sub">' + f.name + ' · ' + f.blurb + '</p>' +
+      '<div class="mm-timer" id="mmTimer">0:00</div>' +
+      '<div class="mm-extra" id="mmExtra">' + (isBot ? '' : '<span class="mm-online"><i></i>' + (DEMO ? 'Demo: simulated players' : 'Searching players at your level') + '</span>') + '</div>' +
+      '</main>';
+    mm.iv = setInterval(function () { var el = $('#mmTimer'); if (!el) { clearInterval(mm.iv); return; } el.textContent = fmtS(now() - mm.t0); }, 250);
+    var secs = f.mix.map(function (m) { return m[0]; });
     loadBanks(secs, function (ok) {
-      if (!ok) { $app.innerHTML = '<div class="boot"><p>Couldn’t load the questions. Check your connection.</p><button class="btn primary" onclick="location.reload()">Try again</button></div>'; return; }
-      var list = pickQuestions(choice.fmt, choice.bot);
-      B = { v: 1, fmt: choice.fmt, bot: choice.bot, list: list, i: 0, rounds: [], status: 'live', startedAt: now(), qStart: 0 };
-      var recent = getJSON(RECENT, []).concat(list.map(function (it) { return qOf(it).id; })).slice(-150); setJSON(RECENT, recent);
-      saveB(); countdownThen(function () { beginQuestion(); });
+      if (!ok) { clearInterval(mm.iv); $app.innerHTML = '<div class="boot"><p>Couldn’t load the questions. Check your connection.</p><button class="btn primary" onclick="location.reload()">Try again</button></div>'; return; }
+      mm.banks = true; maybeFound();
     });
+    if (isBot) later(function () { rollTo({ kind: 'bot', id: flow.bot }); }, wait(1300));
+    else findHuman(function (opp) { rollTo(opp); });
   }
-  function resumeBattle() {
-    closeLayer();
-    var secs = {}; B.list.forEach(function (it) { secs[it.sec] = 1; });
-    $app.className = 'app page'; $app.innerHTML = '<div class="boot"><div class="boot-mark"></div><p>Loading your battle…</p></div>';
-    loadBanks(Object.keys(secs), function (ok) {
-      if (!ok) { $app.innerHTML = '<div class="boot"><p>Couldn’t load the questions.</p><button class="btn primary" onclick="location.reload()">Try again</button></div>'; return; }
-      if (B.status === 'done') return screenResult();
-      var r = B.rounds[B.i];
-      if (!r || !B.qStart) beginQuestion(); else screenBattle();
-    });
+  // Quick Match. The real version asks the server for a player near your rating; the preview fakes one.
+  function findHuman(cb) {
+    if (DEMO && !EMPTY) { later(function () { cb(demoPlayer()); }, wait(Math.round(rnd(3200, 6000)))); }
+    later(fallback, FALLBACK_MS);
   }
-  function countdownThen(cb) {
-    $app.className = 'app page';
-    var bot = BOTS[B.bot], name = playerName() || 'You';
-    $app.innerHTML = '<main class="vs-screen"><div class="vs-card"><div class="vs-side">' + youFace(name, 72) + '<b>' + esc(name.split(' ')[0]) + '</b></div><div class="vs-mid"><span>VS</span><b id="vsCount">3</b></div>' +
-      '<div class="vs-side">' + botFace(B.bot, 72) + '<b>' + bot.name + '</b></div></div><p class="vs-sub">' + FORMATS[B.fmt].name + ' · ' + B.list.length + ' questions</p></main>';
-    var n = 3, el = $('#vsCount');
-    var iv = setInterval(function () { n--; if (n > 0) { el.textContent = n; el.classList.remove('pop'); void el.offsetWidth; el.classList.add('pop'); } else { clearInterval(iv); cb(); } }, 800);
+  function demoPlayer() { return { kind: 'human', nick: pick(DEMO_NICKS), av: Math.floor(Math.random() * AVATARS.length), lvl: Math.floor(rnd(2, 16)), as: 'ace' }; }
+  function fallback() {
+    if (!mm || mm.found || !$('#mmExtra')) return;
+    sfx('bad'); clearInterval(mm.iv);
+    $('#mmTitle').textContent = 'No one’s online right now';
+    $('.radar') && $('.radar').classList.add('idle');
+    $('#mmExtra').innerHTML = '<p class="mm-fb">Battle a bot while you wait, or send a friend an invite link.</p><div class="mm-fb-acts"><button class="gbtn" data-action="fb-bot">' + I.robot + ' Play a bot</button><button class="gbtn white" data-action="fb-friend">' + I.link + ' Invite a friend</button></div><button class="link-btn" data-action="fb-again">Keep searching ' + I.redo + '</button>';
+  }
+  // The slot-machine roll that lands on the opponent.
+  function rollTo(opp) {
+    if (!mm || mm.found || !$('#mmStage')) return;
+    mm.found = opp;
+    var stage = $('#mmStage'), isBot = opp.kind === 'bot';
+    stage.innerHTML = '<div class="roll"><div class="roll-me">' + meFace(84) + '<b>' + esc(nickOr()) + '</b></div><span class="roll-vs">VS</span><div class="roll-slot" id="rollSlot"><div class="roll-card" id="rollCard"></div></div></div>';
+    $('#mmTitle').textContent = isBot ? 'Opponent ready' : 'Opponent found!';
+    var faces = isBot ? Object.keys(BOTS).map(function (k) { return { html: botFace(k, 84), name: BOTS[k].name }; })
+      : DEMO_NICKS.map(function (n, i) { return { html: avatar((i * 5) % AVATARS.length, 84), name: n }; });
+    var final = isBot ? { html: botFace(opp.id, 84), name: BOTS[opp.id].name } : { html: avatar(opp.av, 84), name: opp.nick };
+    var gaps = RM ? [] : [55, 60, 65, 70, 80, 90, 105, 120, 140, 165, 195, 230], k = 0, card = $('#rollCard');
+    (function spin() {
+      if (!$('#rollCard')) return;
+      if (k < gaps.length) {
+        var f = faces[(k * 7 + 3) % faces.length]; card.innerHTML = f.html + '<b>' + esc(f.name) + '</b>'; card.classList.remove('tick'); void card.offsetWidth; card.classList.add('tick'); sfx('roll');
+        later(spin, gaps[k++]);
+      } else {
+        card.innerHTML = final.html + '<b>' + esc(final.name) + '</b>' + (isBot ? '<small>' + BOTS[opp.id].level + ' bot</small>' : '<small>Level ' + opp.lvl + '</small>');
+        card.classList.remove('tick'); card.classList.add('land'); $('#rollSlot').classList.add('locked'); sfx('found');
+        mm.rolled = true; later(maybeFound, wait(900));
+      }
+    })();
+  }
+  function maybeFound() {
+    if (!mm || !mm.found || !mm.banks || !mm.rolled) return;
+    clearInterval(mm.iv);
+    var opp = mm.found; mm = null;
+    startBattle(opp);
+  }
+  function cancelSearch() { if (mm) clearInterval(mm.iv); mm = null; clearTimers(); sfx('tap'); screenHub(); }
+
+  /* --------------------------------------------------------------- friend invite */
+  function screenInvite() {
+    clearTimers(); closeLayer();
+    var code = ''; for (var i = 0; i < 5; i++) code += 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'.charAt(Math.floor(Math.random() * 32));
+    flow.room = code;
+    var url = location.origin + location.pathname + '?room=' + code, f = FORMATS[flow.fmt];
+    var tg = 'https://t.me/share/url?url=' + encodeURIComponent(url) + '&text=' + encodeURIComponent('⚔️ 1v1 me in isatprep Battle Mode (' + f.name + '). Tap to join!');
+    $app.className = 'app page battle-page mm-page';
+    $app.innerHTML = '<main class="mm m-friend invite">' +
+      '<button class="mm-cancel" data-action="cancel-search">' + I.close + ' Cancel</button>' +
+      '<h1 class="mm-title">Challenge a friend</h1><p class="mm-sub">' + f.name + ' · ' + f.blurb + ' · the battle starts when they join</p>' +
+      '<div class="inv-slots"><div class="islot me">' + meFace(84) + '<b>' + esc(nickOr()) + '</b><small>Ready</small></div><span class="roll-vs">VS</span>' +
+        '<div class="islot wait" id="friendSlot"><span class="islot-q">?</span><b>Waiting…</b><small>Share the link</small></div></div>' +
+      '<div class="inv-code"><small>Room code</small><b>' + code.split('').map(function (ch) { return '<i>' + ch + '</i>'; }).join('') + '</b></div>' +
+      '<div class="inv-link"><code id="invUrl">' + esc(url.replace(/^https?:\/\//, '')) + '</code></div>' +
+      '<div class="inv-acts"><a class="gbtn tg" href="' + tg + '" target="_blank" rel="noopener">' + I.tg + ' Share on Telegram</a><button class="gbtn white" data-action="copy-link" data-url="' + esc(url) + '">' + I.copy + ' Copy link</button></div>' +
+      '</main>';
+    if (DEMO && !EMPTY) later(function () { friendJoined({ kind: 'human', nick: pick(DEMO_NICKS), av: Math.floor(Math.random() * AVATARS.length), lvl: Math.floor(rnd(2, 16)), as: 'ace' }); }, wait(6000));
+    loadBanks(f.mix.map(function (m) { return m[0]; }), function () { });
+  }
+  function friendJoined(opp) {
+    var slot = $('#friendSlot'); if (!slot) return;
+    slot.className = 'islot joined'; slot.innerHTML = avatar(opp.av, 84) + '<b>' + esc(opp.nick) + '</b><small>Level ' + opp.lvl + ' · joined!</small>'; sfx('found');
+    later(function () { var f = FORMATS[flow.fmt]; loadBanks(f.mix.map(function (m) { return m[0]; }), function (ok) { if (ok) startBattle(opp); }); }, wait(1400));
+  }
+  function copyLink(url, btn) {
+    var done = function () { if (btn) { btn.innerHTML = I.check + ' Copied!'; setTimeout(function () { if (btn.isConnected) btn.innerHTML = I.copy + ' Copy link'; }, 1600); } sfx('pick'); };
+    try { navigator.clipboard.writeText(url).then(done, function () { toast(url); }); } catch (e) { toast(url); }
+  }
+
+  /* --------------------------------------------------------------- start + VS */
+  function startBattle(opp) {
+    var behave = opp.kind === 'bot' ? opp.id : (opp.as || 'ace');
+    var list = pickQuestions(flow.fmt, behave);
+    B = { v: 2, mode: flow.mode, fmt: flow.fmt, bot: behave, opp: opp, list: list, i: 0, rounds: [], status: 'live', startedAt: now(), qStart: 0, seen: false };
+    var recent = getJSON(RECENT, []).concat(list.map(function (it) { return qOf(it).id; })).slice(-150); setJSON(RECENT, recent);
+    saveB(); screenVS(beginQuestion);
+  }
+  function screenVS(cb) {
+    clearTimers(); closeLayer();
+    var lv = lvl(P.xp), rk = P.rating ? rankOf(P.rating) : null;
+    var oppSub = B.opp.kind === 'bot' ? BOTS[B.opp.id].level + ' bot' : 'Level ' + B.opp.lvl;
+    $app.className = 'app page battle-page vs-page';
+    $app.innerHTML = '<main class="vs2" id="vs2">' +
+      '<div class="vs2-half you"><div class="vs2-card">' + meFace(116, 'big') + '<b>' + esc(nickOr()) + '</b><small>Level ' + lv.L + ' · ' + (rk ? rk.name : 'Unranked') + '</small></div></div>' +
+      '<div class="vs2-half opp"><div class="vs2-card">' + oppFace(116) + '<b>' + esc(oppName()) + '</b><small>' + oppSub + '</small></div></div>' +
+      '<div class="vs2-badge" id="vsBadge">VS</div>' +
+      '<div class="vs2-info">' + MODES[B.mode].name + ' · ' + FORMATS[B.fmt].name + ' · ' + B.list.length + ' questions</div>' +
+      '<div class="vs2-count" id="vsCount" aria-live="assertive"></div>' +
+      '</main>';
+    sfx('whoosh');
+    later(function () { var m = $('#vs2'); if (!m) return; m.classList.add('slam'); sfx('slam'); buzz(30); }, wait(520));
+    var seq = ['3', '2', '1', 'GO!'], k = 0;
+    later(function count() {
+      var el = $('#vsCount'); if (!el) return;
+      if (k < seq.length) {
+        el.textContent = seq[k]; el.className = 'vs2-count show' + (seq[k] === 'GO!' ? ' go' : ''); void el.offsetWidth; el.classList.add('pop');
+        sfx(seq[k] === 'GO!' ? 'go' : 'count'); k++;
+        later(count, wait(seq[k - 1] === 'GO!' ? 520 : 720));
+      } else cb();
+    }, wait(1500));
   }
 
   /* =================================================================== battle screen */
-  var view = { ticker: null, pending: null, revealTimer: null, calcOpen: false };
+  var view = { ticker: null, pending: null, revealTimer: null, calcOpen: false, lastSec: -1 };
   function curItem() { return B.list[B.i]; }
   function beginQuestion() {
     var it = curItem(), q = qOf(it), lim = limitOf(it);
     B.qStart = now();
-    B.rounds[B.i] = { done: false, a: null, ok: false, pts: 0, ms: 0, bot: botAttempt(B.bot, it.sec, q, lim) };
-    B.rounds[B.i].bot.pts = points(B.rounds[B.i].bot.ok && B.rounds[B.i].bot.ms <= lim, B.rounds[B.i].bot.ms, lim);
-    if (B.rounds[B.i].bot.ms > lim) B.rounds[B.i].bot.ok = false;
+    var bot = botAttempt(B.bot, it.sec, q, lim);
+    if (bot.ms > lim) bot.ok = false;
+    var prev = streakBefore(B.i, 'bot');
+    bot.combo = bot.ok ? prev + 1 : 0;
+    bot.pts = bot.ok ? points(true, bot.ms, lim) + comboBonus(prev) : 0;
+    B.rounds[B.i] = { done: false, a: null, ok: false, pts: 0, ms: 0, combo: 0, bot: bot };
     saveB(); view.pending = null; screenBattle();
   }
+  function dotsHTML(who) {
+    return '<div class="sb-dots ' + who + '">' + B.list.map(function (x, k) { var rr = B.rounds[k], ok = rr && rr.done ? (who === 'me' ? rr.ok : rr.bot.ok) : null; return '<i class="' + (k === B.i && who === 'me' ? 'cur ' : '') + (ok === null ? '' : ok ? 'ok' : 'bad') + '"></i>'; }).join('') + '</div>';
+  }
+  function share(tt) { var s = tt.y + tt.b; return s ? Math.max(8, Math.min(92, tt.y / s * 100)) : 50; }
   function screenBattle() {
-    var it = curItem(), q = qOf(it), sec = it.sec, r = B.rounds[B.i], name = playerName() || 'You', bot = BOTS[B.bot], tt = totals();
-    var isMath = sec === 'math';
+    var it = curItem(), q = qOf(it), sec = it.sec, tt = totals(), isMath = sec === 'math';
+    var myC = streakBefore(B.rounds[B.i].done ? B.i + 1 : B.i, 'me');
     $app.className = 'app test practice battle ' + (isMath ? 'math' : 'rw') + (view.calcOpen && isMath ? ' calc-open' : '');
     $app.innerHTML =
       '<header class="tb btb">' +
         '<div class="tb-left"><button class="icon-btn" data-action="quit" aria-label="Quit battle" title="Quit">' + I.close + '</button><span class="btb-fmt">' + FORMATS[B.fmt].name + '</span></div>' +
-        '<div class="tb-center"><div class="scoreboard">' +
-          '<div class="sb-side you">' + youFace(name, 34) + '<div><small>' + esc(name.split(' ')[0]) + '</small><b id="sbYou">' + tt.y + '</b></div></div>' +
-          '<div class="sb-mid"><div class="sb-dots">' + B.list.map(function (x, k) { var rr = B.rounds[k]; return '<i class="' + (k === B.i ? 'cur ' : '') + (rr && rr.done ? (rr.ok ? 'ok' : 'bad') : '') + '"></i>'; }).join('') + '</div>' +
-            '<div class="sb-dots bot">' + B.list.map(function (x, k) { var rr = B.rounds[k]; return '<i class="' + (rr && rr.done ? (rr.bot.ok ? 'ok' : 'bad') : '') + '"></i>'; }).join('') + '</div></div>' +
-          '<div class="sb-side bot"><div><small>' + bot.name + '</small><b id="sbBot">' + tt.b + '</b></div>' + botFace(B.bot, 34) + '</div>' +
+        '<div class="tb-center"><div class="tug">' +
+          '<div class="tug-side me' + (myC >= 3 ? ' fire' : '') + '">' + meFace(36) + '<div class="tug-who"><small>' + esc(nickOr()) + '</small><b id="sbYou">' + tt.y + '</b></div><span class="combo" id="comboMe">' + (myC >= 2 ? '🔥×' + myC : '') + '</span></div>' +
+          '<div class="tug-mid"><div class="tug-bar"><i id="tugFill" style="width:' + share(tt) + '%"></i><span class="tug-knot" id="tugKnot" style="left:' + share(tt) + '%"></span></div>' + dotsHTML('me') + dotsHTML('opp') + '</div>' +
+          '<div class="tug-side opp"><span class="combo" id="comboOpp"></span><div class="tug-who"><small>' + esc(oppName()) + '</small><b id="sbBot">' + tt.b + '</b></div>' + oppFace(36) + '</div>' +
         '</div></div>' +
         '<div class="tb-right">' + (isMath ? '<button class="tool" data-action="calc" aria-pressed="' + view.calcOpen + '">' + I.calc + '<span>Calculator</span></button><button class="tool" data-action="reference">' + I.ref + '<span>Reference</span></button>' : '') + themeBtn('tool theme-tool') + '</div>' +
       '</header>' +
@@ -305,20 +687,20 @@
       '<div class="bq-timer" id="bqTimer"><svg viewBox="0 0 40 40"><circle cx="20" cy="20" r="17" class="rc-bg"/><circle cx="20" cy="20" r="17" class="rc-fg" id="bqFg"/></svg><b id="bqTxt"></b></div></div>';
     var body = head + '<div class="prompt">' + q.q + '</div><div id="answerArea"></div><div id="roundBox"></div>';
     var stage = $('#stage');
-    if (sec === 'rw') { stage.className = 'stage split'; stage.innerHTML = '<section class="pane passage-pane"><div class="passage">' + q.p + '</div></section><div class="divider" aria-hidden="true"></div><section class="pane question-pane" id="qPane">' + body + '</section>'; }
-    else { stage.className = 'stage single'; stage.innerHTML = '<section class="pane question-pane math-pane" id="qPane"><div class="math-col">' + body + '</div></section>'; }
+    if (sec === 'rw') { stage.className = 'stage split q-enter'; stage.innerHTML = '<section class="pane passage-pane"><div class="passage">' + q.p + '</div></section><div class="divider" aria-hidden="true"></div><section class="pane question-pane" id="qPane">' + body + '</section>'; }
+    else { stage.className = 'stage single q-enter'; stage.innerHTML = '<section class="pane question-pane math-pane" id="qPane"><div class="math-col">' + body + '</div></section>'; }
     paintAnswer(); paintRound(); renderMath(stage);
     if (isMath && view.calcOpen) mountDesmos();
-    startTicker(); tick();
+    view.lastSec = -1; startTicker(); tick();
   }
   function paintAnswer() {
     var it = curItem(), q = qOf(it), sec = it.sec, r = B.rounds[B.i], box = $('#answerArea'), done = r.done, key = done ? keyOf(sec, q) : null;
-    var mine = done ? r.a : view.pending;
+    var mine = done ? r.a : view.pending, on = oppName();
     if (q.t === 'mcq') {
       box.innerHTML = '<div class="choices' + (done ? ' review' : '') + '" role="radiogroup" aria-label="Answer choices">' + q.c.map(function (c, i) {
         var L = 'ABCD'.charAt(i), sel = mine === L, isKey = done && L === key, wrong = done && sel && !isKey, botHere = done && r.bot.a === L;
         return '<div class="choice-row' + (sel && !done ? ' selected' : '') + (isKey ? ' key' : '') + (wrong ? ' wrong' : '') + '"><div class="choice" role="radio" tabindex="0" aria-checked="' + sel + '" data-action="choose" data-letter="' + L + '"><span class="letter">' + L + '</span><span class="ctext">' + c + '</span>' +
-          '<span class="ctags">' + (done && sel ? '<span class="who-tag you">' + (isKey ? I.check : I.cross) + ' You</span>' : '') + (botHere ? '<span class="who-tag bot ' + (isKey ? 'ok' : 'bad') + '">' + BOTS[B.bot].name + '</span>' : '') + (isKey && !sel ? '<span class="tag ok">' + I.check + ' Correct</span>' : '') + '</span></div></div>';
+          '<span class="ctags">' + (done && sel ? '<span class="who-tag you">' + (isKey ? I.check : I.cross) + ' You</span>' : '') + (botHere ? '<span class="who-tag bot ' + (isKey ? 'ok' : 'bad') + '">' + esc(on) + '</span>' : '') + (isKey && !sel ? '<span class="tag ok">' + I.check + ' Correct</span>' : '') + '</span></div></div>';
       }).join('') + '</div>';
     } else if (done) {
       box.innerHTML = '<div class="spr-review"><div><small>Your answer</small><b class="' + (r.ok ? 'ok' : r.a ? 'bad' : 'om') + '">' + (r.a ? esc(r.a) : '—') + '</b></div><div><small>Correct answer</small><b class="ok">' + esc(keyText(sec, q)) + '</b></div></div>';
@@ -333,62 +715,84 @@
       view.sprCommit = commit; paintPrev();
     }
   }
+  function oppStatus(state) {
+    var on = esc(oppName());
+    if (state === 'in') return oppFace(26) + '<span>' + on + ' locked in ' + I.check + '</span>';
+    if (state === 'answering') return oppFace(26) + '<span>' + on + ' is answering<i class="dots"><b></b><b></b><b></b></i></span>';
+    return oppFace(26) + '<span>' + on + ' is thinking<i class="dots"><b></b><b></b><b></b></i></span>';
+  }
   function paintRound() {
-    var it = curItem(), q = qOf(it), sec = it.sec, r = B.rounds[B.i], box = $('#roundBox'), bot = BOTS[B.bot];
+    var it = curItem(), q = qOf(it), r = B.rounds[B.i], box = $('#roundBox'), on = esc(oppName());
     if (!r.done) {
       var botIn = now() - B.qStart >= r.bot.ms && r.bot.ms <= limitOf(it);
-      box.innerHTML = '<div class="lock-row"><button class="btn primary big" id="lockBtn" data-action="lock">' + I.check + ' Lock in answer</button>' +
-        '<span class="bot-status" id="botStatus">' + botFace(B.bot, 26) + '<span>' + (botIn ? bot.name + ' has answered' : bot.name + ' is thinking<i class="dots"><b></b><b></b><b></b></i>') + '</span></span></div>';
+      box.innerHTML = '<div class="lock-row"><button class="gbtn lock-btn" id="lockBtn" data-action="lock">' + I.check + ' Lock in answer</button>' +
+        '<span class="bot-status' + (botIn ? ' in' : '') + '" id="botStatus">' + oppStatus(botIn ? 'in' : 'think') + '</span></div>';
       paintLock(); return;
     }
     var last = B.i === B.list.length - 1;
     var you = r.a == null ? '<span class="rr-res to">' + I.clock + ' No answer</span>' : r.ok ? '<span class="rr-res ok">' + I.check + ' Correct</span>' : '<span class="rr-res bad">' + I.cross + ' Wrong</span>';
     var bres = r.bot.ms > limitOf(it) ? '<span class="rr-res to">' + I.clock + ' No answer</span>' : r.bot.ok ? '<span class="rr-res ok">' + I.check + ' Correct</span>' : '<span class="rr-res bad">' + I.cross + ' Wrong</span>';
     box.innerHTML = '<div class="round-card">' +
-      '<div class="rc-side">' + youFace(playerName() || 'You', 30) + '<div><small>You · ' + (r.a == null ? 'time ran out' : fmtS(r.ms)) + '</small>' + you + '</div><b class="rc-pts">+' + r.pts + '</b></div>' +
-      '<div class="rc-side">' + botFace(B.bot, 30) + '<div><small>' + bot.name + ' · ' + (r.bot.ms > limitOf(it) ? 'time ran out' : fmtS(r.bot.ms)) + '</small>' + bres + '</div><b class="rc-pts">+' + r.bot.pts + '</b></div>' +
+      '<div class="rc-side' + (r.ok ? ' ok' : ' bad') + '">' + meFace(32) + '<div><small>You · ' + (r.a == null ? 'time ran out' : fmtS(r.ms)) + '</small>' + you + (r.combo >= 2 ? '<span class="rc-combo">🔥 ×' + r.combo + '</span>' : '') + '</div><b class="rc-pts">+' + r.pts + '</b></div>' +
+      '<div class="rc-side' + (r.bot.ok ? ' ok' : ' bad') + '">' + oppFace(32) + '<div><small>' + on + ' · ' + (r.bot.ms > limitOf(it) ? 'time ran out' : fmtS(r.bot.ms)) + '</small>' + bres + (r.bot.combo >= 2 ? '<span class="rc-combo">🔥 ×' + r.bot.combo + '</span>' : '') + '</div><b class="rc-pts">+' + r.bot.pts + '</b></div>' +
       '</div>' +
       (view.showX ? '<div class="explain"><b>' + I.spark + ' Explanation</b><div>' + q.x + '</div></div>' : '') +
       '<div class="fb-actions">' + (view.showX ? '' : '<button class="btn ghost" data-action="show-x">' + I.spark + ' Show explanation</button>') +
-      '<button class="btn primary" data-action="next-q">' + (last ? I.trophy + ' See results' : 'Next question ' + I.chevRight) + '</button></div>';
+      '<button class="gbtn" data-action="next-q">' + (last ? I.trophy + ' See results' : 'Next question ' + I.chevRight) + '</button></div>';
     renderMath(box);
   }
   function paintLock() { var b = $('#lockBtn'); if (b) b.disabled = !view.pending; }
   function choose(L) {
     var r = B.rounds[B.i]; if (r.done) return;
-    view.pending = L;
+    view.pending = L; sfx('tap');
     $$('.choice-row').forEach(function (row) { var on = row.querySelector('[data-letter]').getAttribute('data-letter') === L; row.classList.toggle('selected', on); row.querySelector('.choice').setAttribute('aria-checked', on); });
     paintLock();
   }
   function lockIn(timedOut) {
     var it = curItem(), q = qOf(it), r = B.rounds[B.i], lim = limitOf(it); if (r.done) return;
-    var ms = Math.min(now() - B.qStart, lim);
+    var ms = Math.min(now() - B.qStart, lim), prev = streakBefore(B.i, 'me');
     r.a = timedOut ? null : view.pending; r.ms = ms;
     r.ok = !timedOut && isRight(it.sec, q, r.a);
-    r.pts = points(r.ok, ms, lim);
+    r.combo = r.ok ? prev + 1 : 0;
+    r.pts = r.ok ? points(true, ms, lim) + comboBonus(prev) : 0;
     stopTicker();
     var botLate = r.bot.ms > ms && r.bot.ms <= lim;
-    var finish = function () { r.done = true; view.showX = false; saveB(); paintAnswer(); paintRound(); renderMath($('#answerArea')); paintScore(); };
-    saveB();
-    if (botLate && !timedOut) {          // the bot hasn't answered yet: a short "answering…" moment, its time still counts as rolled
-      var st = $('#botStatus'); if (st) st.innerHTML = botFace(B.bot, 26) + '<span>' + BOTS[B.bot].name + ' is answering<i class="dots"><b></b><b></b><b></b></i></span>';
+    var finish = function () {
+      r.done = true; view.showX = false; saveB();
+      var from = $('#answerArea');
+      paintAnswer(); paintRound(); renderMath($('#answerArea'));
+      sfx(r.ok ? 'ok' : 'bad'); if (!r.ok) buzz(60);
+      if (r.combo >= 2) later(function () { sfx('combo'); }, 180);
+      floatText('+' + r.pts, from, $('#sbYou'), r.ok ? 'ok' : 'zero');
+      later(function () { floatText('+' + r.bot.pts, $('#botStatus') || $('#roundBox'), $('#sbBot'), r.bot.ok ? 'opp' : 'zero'); }, 220);
+      later(paintScore, wait(650));
+    };
+    saveB(); sfx('lock');
+    if (botLate && !timedOut) {          // the opponent hasn't answered yet: a short "answering…" moment, its time still counts as rolled
+      var st = $('#botStatus'); if (st) st.innerHTML = oppStatus('answering');
       var lb = $('#lockBtn'); if (lb) { lb.disabled = true; lb.innerHTML = I.check + ' Locked in'; }
       $$('.choice').forEach(function (c) { c.setAttribute('data-action', ''); });
       view.revealTimer = setTimeout(finish, 900);
     } else finish();
   }
   function paintScore() {
-    var tt = totals(), a = $('#sbYou'), b = $('#sbBot');
-    if (a) { a.textContent = tt.y; a.classList.remove('bump'); void a.offsetWidth; a.classList.add('bump'); }
-    if (b) { b.textContent = tt.b; b.classList.remove('bump'); void b.offsetWidth; b.classList.add('bump'); }
-    var dots = $$('.sb-dots:not(.bot) i'), bdots = $$('.sb-dots.bot i'), r = B.rounds[B.i];
+    var tt = totals(), before = totals(B.i), a = $('#sbYou'), b = $('#sbBot'), r = B.rounds[B.i];
+    if (a) { countTo(a, before.y, tt.y, 600); a.classList.remove('bump'); void a.offsetWidth; a.classList.add('bump'); }
+    if (b) { countTo(b, before.b, tt.b, 600); b.classList.remove('bump'); void b.offsetWidth; b.classList.add('bump'); }
+    var w = share(tt), fill = $('#tugFill'), knot = $('#tugKnot');
+    if (fill) fill.style.width = w + '%'; if (knot) { knot.style.left = w + '%'; knot.classList.remove('jolt'); void knot.offsetWidth; knot.classList.add('jolt'); }
+    var dots = $$('.sb-dots.me i'), bdots = $$('.sb-dots.opp i');
     if (dots[B.i]) dots[B.i].className = 'cur ' + (r.ok ? 'ok' : 'bad');
     if (bdots[B.i]) bdots[B.i].className = r.bot.ok ? 'ok' : 'bad';
+    var cm = $('#comboMe'), co = $('#comboOpp'), side = $('.tug-side.me');
+    if (cm) { cm.textContent = r.combo >= 2 ? '🔥×' + r.combo : ''; if (r.combo >= 2) { cm.classList.remove('pop'); void cm.offsetWidth; cm.classList.add('pop'); } }
+    if (co) { co.textContent = r.bot.combo >= 2 ? '🔥×' + r.bot.combo : ''; if (r.bot.combo >= 2) { co.classList.remove('pop'); void co.offsetWidth; co.classList.add('pop'); } }
+    if (side) side.classList.toggle('fire', r.combo >= 3);
   }
   function nextQuestion() {
-    clearTimeout(view.revealTimer);
+    clearTimeout(view.revealTimer); clearTimers();
     if (B.i >= B.list.length - 1) { finishBattle(); return; }
-    B.i++; saveB(); beginQuestion();
+    B.i++; saveB(); sfx('whoosh'); beginQuestion();
   }
   function startTicker() { stopTicker(); view.ticker = setInterval(tick, 200); }
   function stopTicker() { if (view.ticker) clearInterval(view.ticker); view.ticker = null; }
@@ -396,65 +800,152 @@
     if (!B || B.status !== 'live' || !$('#bqTimer')) return stopTicker();
     var it = curItem(), r = B.rounds[B.i], lim = limitOf(it);
     var left = r.done ? Math.max(0, lim - r.ms) : Math.max(0, lim - (now() - B.qStart));
-    var fg = $('#bqFg'), tx = $('#bqTxt'), c = 2 * Math.PI * 17;
+    var fg = $('#bqFg'), tx = $('#bqTxt'), c = 2 * Math.PI * 17, secs = Math.ceil(left / 1000);
     if (fg) { fg.style.strokeDasharray = c; fg.style.strokeDashoffset = c * (1 - left / lim); }
-    if (tx) tx.textContent = Math.ceil(left / 1000);
+    if (tx) tx.textContent = secs;
     $('#bqTimer').classList.toggle('urgent', left < 10000 && !r.done);
+    $('#bqTimer').classList.toggle('final', left <= 5000 && !r.done);
     if (r.done) return stopTicker();
+    if (left <= 5000 && left > 0 && secs !== view.lastSec) { view.lastSec = secs; sfx('tick'); }
     var st = $('#botStatus');
     if (st && !st.classList.contains('in') && now() - B.qStart >= r.bot.ms && r.bot.ms <= lim) {
-      st.classList.add('in'); st.innerHTML = botFace(B.bot, 26) + '<span>' + BOTS[B.bot].name + ' has answered</span>';
+      st.classList.add('in'); st.innerHTML = oppStatus('in'); sfx('oppIn');
     }
     if (left <= 0) lockIn(true);
   }
 
-  /* =================================================================== results */
+  /* =================================================================== results + rewards */
   function finishBattle() {
     var tt = totals(), res = tt.y > tt.b ? 'w' : tt.y < tt.b ? 'l' : 'd';
     if (B.status !== 'done') {
-      B.status = 'done'; B.result = res; B.endedAt = now(); saveB();
-      var r = S[B.bot] || { w: 0, l: 0, d: 0 }; r[res]++; S[B.bot] = r; setJSON(STATS, S);
+      B.status = 'done'; B.result = res; B.endedAt = now();
+      if (B.opp.kind === 'bot') { var r = S[B.opp.id] || { w: 0, l: 0, d: 0 }; r[res]++; S[B.opp.id] = r; setJSON(STATS, S); }
+      B.rewards = applyRewards(res, tt);
+      saveB(); saveP();
     }
     screenResult();
   }
+  function applyRewards(res, tt) {
+    var n = B.list.length, lines = [], winXp = B.opp.kind === 'bot' ? BOTS[B.opp.id].xp : 30;
+    var bestC = 0, fastest = 0; B.rounds.forEach(function (r) { if (r.combo > bestC) bestC = r.combo; if (r.ok && (!fastest || r.ms < fastest)) fastest = r.ms; });
+    lines.push(res === 'w' ? ['Victory', winXp] : res === 'd' ? ['Draw', 15] : ['Good fight', 8]);
+    if (tt.yc) lines.push(['Correct answers × ' + tt.yc, tt.yc * 2]);
+    if (bestC >= 3) lines.push(['Best combo ×' + bestC, Math.min(25, 5 * (bestC - 2))]);
+    if (res === 'w' && P.lastWinDay !== dayKey()) { lines.push(['First win of the day', winXp]); P.lastWinDay = dayKey(); }
+    var total = 0; lines.forEach(function (l) { total += l[1]; });
+    var xp0 = P.xp || 0;
+    P.xp = xp0 + total; P.battles = (P.battles || 0) + 1; P[res] = (P[res] || 0) + 1;
+    if (res === 'w') { P.streak = (P.streak || 0) + 1; if (P.streak > (P.best || 0)) P.best = P.streak; } else if (res === 'l') P.streak = 0;
+    P.correct = (P.correct || 0) + tt.yc; P.answered = (P.answered || 0) + n;
+    if (fastest && (!P.fastest || fastest < P.fastest)) P.fastest = fastest;
+    if (bestC > (P.bestCombo || 0)) P.bestCombo = bestC;
+    // badges
+    var half = Math.floor(n / 2), ht = totals(half), hr = new Date().getHours(), got = [];
+    var checks = { first: res === 'w', streak3: P.streak >= 3, streak10: P.streak >= 10, legend: res === 'w' && B.opp.kind === 'bot' && B.opp.id === 'legend', perfect: res === 'w' && tt.yc === n,
+      combo5: bestC >= 5, speed: !!fastest && fastest < 10000, comeback: res === 'w' && half > 0 && ht.y < ht.b, b10: P.battles >= 10, b50: P.battles >= 50, owl: hr >= 23 || hr < 4 };
+    P.badges = P.badges || {};
+    BADGES.forEach(function (b) { if (checks[b[0]] && !P.badges[b[0]]) { P.badges[b[0]] = now(); got.push(b[0]); } });
+    P.recent = [{ res: res, opp: oppName(), bot: B.opp.kind === 'bot' ? B.opp.id : null, av: B.opp.av, fmt: B.fmt, y: tt.y, b: tt.b, at: now() }].concat(P.recent || []).slice(0, 6);
+    return { lines: lines, total: total, xp0: xp0, xp1: P.xp, badges: got };
+  }
   function screenResult() {
-    stopTicker();
-    var tt = totals(), bot = BOTS[B.bot], name = playerName() || 'You', res = B.result || (tt.y > tt.b ? 'w' : tt.y < tt.b ? 'l' : 'd'), n = B.list.length;
-    var title = res === 'w' ? 'You win! 🏆' : res === 'l' ? bot.name + ' wins' : 'It’s a draw';
-    var sub = res === 'w' ? 'You beat ' + bot.name + ' (' + bot.level + ' bot). ' + (B.bot !== 'legend' ? 'Ready for a tougher opponent?' : 'You beat the Legend!') : res === 'l' ? 'Read the explanations below, then take your revenge.' : 'Dead even. Rematch to settle it.';
-    var yTime = 0, bTime = 0; B.rounds.forEach(function (r) { yTime += r.ms; bTime += Math.min(r.bot.ms, limitOf(B.list[B.rounds.indexOf(r)])); });
-    var rec = record(B.bot);
-    $app.className = 'app page';
-    $app.innerHTML = '<header class="brandbar"><a class="wordmark" href="practice.html">' + wordmark() + '</a><div class="rb-actions">' + themeBtn('theme-pill') + '<a class="btn ghost" href="practice.html">' + I.book + ' Practice</a></div></header>' +
-      '<main class="results battle-res">' +
-      '<section class="score-hero res-hero ' + res + '"><div><div class="eyebrow light">' + I.swords + ' Battle result · ' + FORMATS[B.fmt].name + '</div><h1>' + title + '</h1><p>' + sub + '</p>' +
-        '<div class="sh-actions"><button class="btn white" data-action="rematch">' + I.redo + ' Rematch</button><button class="btn glass" data-action="new-battle">Change opponent</button></div></div>' +
-        '<div class="final-board"><div class="fb-side' + (res === 'w' ? ' win' : '') + '">' + youFace(name, 56) + '<b>' + tt.y + '</b><small>' + esc(name.split(' ')[0]) + '</small></div><span class="fb-vs">vs</span>' +
-        '<div class="fb-side' + (res === 'l' ? ' win' : '') + '">' + botFace(B.bot, 56) + '<b>' + tt.b + '</b><small>' + bot.name + '</small></div></div></section>' +
-      '<div class="sec-cards">' +
-        '<div class="sec-card"><div class="sc-top"><span>Correct</span></div><div class="sc-score">' + tt.yc + '<small>/ ' + n + '</small></div><div class="sc-bar"><i style="width:' + pct(tt.yc, n) + '%"></i></div><p class="fine">' + bot.name + ': ' + tt.bc + ' / ' + n + '</p></div>' +
-        '<div class="sec-card"><div class="sc-top"><span>Average time</span></div><div class="sc-score">' + fmtS(yTime / n) + '</div><p class="fine">' + bot.name + ': ' + fmtS(bTime / n) + ' per question</p></div>' +
-        '<div class="sec-card meta"><div class="meta-row"><span>' + I.trophy + 'Record vs ' + bot.name + '</span><b>' + rec.w + 'W · ' + rec.l + 'L' + (rec.d ? ' · ' + rec.d + 'D' : '') + '</b></div>' +
-          Object.keys(BOTS).filter(function (k) { return k !== B.bot; }).map(function (k) { var x = record(k); return '<div class="meta-row"><span>' + botFace(k, 18) + ' vs ' + BOTS[k].name + '</span><b>' + x.w + 'W · ' + x.l + 'L' + (x.d ? ' · ' + x.d + 'D' : '') + '</b></div>'; }).join('') + '</div>' +
+    stopTicker(); clearTimers(); closeLayer();
+    var tt = totals(), on = oppName(), res = B.result || (tt.y > tt.b ? 'w' : tt.y < tt.b ? 'l' : 'd'), n = B.list.length, rw = B.rewards || { lines: [], total: 0, xp0: P.xp, xp1: P.xp, badges: [] };
+    var anim = !B.seen, word = res === 'w' ? 'VICTORY' : res === 'l' ? 'DEFEAT' : 'DRAW';
+    var sub = res === 'w' ? 'You beat ' + esc(on) + '!' + (B.opp.kind === 'bot' && B.opp.id !== 'legend' ? ' Ready for a tougher opponent?' : '') : res === 'l' ? esc(on) + ' won this one. Check the explanations, then take your revenge.' : 'Dead even. Rematch to settle it.';
+    var yTime = 0, bTime = 0; B.rounds.forEach(function (r, k) { yTime += r.ms; bTime += Math.min(r.bot.ms, limitOf(B.list[k])); });
+    var L0 = lvl(rw.xp0), L1 = lvl(rw.xp1);
+    var tgText = (res === 'w' ? '⚔️ I beat ' + on + ' ' + tt.y + '–' + tt.b : res === 'l' ? '⚔️ ' + on + ' beat me ' + tt.b + '–' + tt.y + '. Revenge soon' : '⚔️ ' + tt.y + '–' + tt.y + ' draw vs ' + on) + ' in isatprep Battle Mode (' + FORMATS[B.fmt].name + '). Can you do better?';
+    var tg = 'https://t.me/share/url?url=' + encodeURIComponent(location.origin + location.pathname) + '&text=' + encodeURIComponent(tgText);
+    $app.className = 'app page battle-page';
+    $app.innerHTML = brandbar() +
+      '<main class="results battle-res' + (anim ? ' anim' : '') + '">' +
+      '<section class="res-top ' + res + '">' +
+        '<div class="res-banner" aria-label="' + word + '">' + word.split('').map(function (ch, i) { return '<span style="--i:' + i + '">' + ch + '</span>'; }).join('') + '</div>' +
+        '<p class="res-sub">' + sub + '</p>' +
+        '<div class="final-board"><div class="fb-side' + (res === 'w' ? ' win' : '') + '">' + (res === 'w' ? '<span class="crown">👑</span>' : '') + meFace(64) + '<b id="fbY">' + (anim ? 0 : tt.y) + '</b><small>' + esc(nickOr()) + '</small></div><span class="fb-vs">VS</span>' +
+          '<div class="fb-side' + (res === 'l' ? ' win' : '') + '">' + (res === 'l' ? '<span class="crown">👑</span>' : '') + oppFace(64) + '<b id="fbB">' + (anim ? 0 : tt.b) + '</b><small>' + esc(on) + '</small></div></div>' +
+        '<div class="res-acts"><button class="gbtn white" data-action="rematch">' + I.redo + ' Rematch</button><button class="gbtn glass3" data-action="hub">' + I.home + ' Battle Mode</button><a class="gbtn tg" href="' + tg + '" target="_blank" rel="noopener">' + I.tg + ' Share</a></div>' +
+      '</section>' +
+      '<div class="res-grid">' +
+        '<section class="hpanel rewards"><div class="hp-head"><h3>' + I.spark + ' Rewards</h3><b class="rw-total">+<span id="rwTotal">' + (anim ? 0 : rw.total) + '</span> XP</b></div>' +
+          '<div class="rw-lines">' + rw.lines.map(function (l, i) { return '<div class="rw-line" style="--i:' + i + '"><span>' + esc(l[0]) + '</span><b>+' + l[1] + '</b></div>'; }).join('') + '</div>' +
+          '<div class="rw-level"><span class="rw-lv" id="rwLv">Level ' + (anim ? L0.L : L1.L) + '</span><span class="rw-xp" id="rwXp">' + (anim ? L0.into : L1.into) + ' / ' + (anim ? L0.need : L1.need) + ' XP</span></div>' +
+          '<div class="xpbar big"><i id="rwBar" style="width:' + pct(anim ? L0.into : L1.into, anim ? L0.need : L1.need) + '%"></i></div>' +
+          (rw.badges.length ? '<div class="new-badges"><small>New badge' + (rw.badges.length > 1 ? 's' : '') + '!</small><div>' + rw.badges.map(function (id, i) { var b = BADGES.filter(function (x) { return x[0] === id; })[0]; return '<span class="bdg got nb" style="--i:' + i + '" title="' + esc(b[3]) + '"><i>' + b[1] + '</i><small>' + b[2] + '</small></span>'; }).join('') + '</div></div>' : '') +
+          '<div class="rw-rank">' + rankBadge(P.rating ? rankOf(P.rating) : null, 26) + '<span>' + (B.mode === 'quick' && ONLINE ? 'Rating updated' : B.mode === 'quick' ? 'Ranked rating starts when online battles open.' : 'Unranked battle. Play Quick Match to earn a rank.') + '</span></div>' +
+        '</section>' +
+        '<section class="hpanel"><div class="hp-head"><h3>' + I.trophy + ' Battle stats</h3></div><div class="bstats">' +
+          bstat('Correct', tt.yc + '/' + n, tt.bc + '/' + n) + bstat('Avg. time', fmtS(yTime / n), fmtS(bTime / n)) +
+          bstat('Best combo', maxCombo('me') ? '×' + maxCombo('me') : '–', maxCombo('opp') ? '×' + maxCombo('opp') : '–') +
+          '<div class="bs-foot"><span>' + meFace(20) + ' You</span><span>' + oppFace(20) + ' ' + esc(on) + '</span></div>' +
+        '</div></section>' +
       '</div>' +
       '<section class="panel"><div class="panel-head"><h2>Question by question</h2><small class="muted">Tap a question to see it with the explanation</small></div><div class="res-rows">' +
         B.list.map(function (it, k) {
           var q = qOf(it), r = B.rounds[k];
           return '<button class="res-row br-row" data-action="open-q" data-k="' + k + '"><span class="rr-n ' + (r.ok ? 'ok' : 'bad') + '">' + (k + 1) + '</span><span class="rr-d">' + SEC[it.sec].short + ' · ' + esc(q.sk) + ' · ' + DIFF[q.d] + '</span>' +
-            '<span class="rr-a">You <b class="' + (r.ok ? 'okc' : 'badc') + '">+' + r.pts + '</b> · ' + bot.name + ' <b class="' + (r.bot.ok ? 'okc' : 'badc') + '">+' + r.bot.pts + '</b></span>' + I.chevRight + '</button>';
+            '<span class="rr-a">You <b class="' + (r.ok ? 'okc' : 'badc') + '">+' + r.pts + '</b> · ' + esc(on) + ' <b class="' + (r.bot.ok ? 'okc' : 'badc') + '">+' + r.bot.pts + '</b></span>' + I.chevRight + '</button>';
         }).join('') + '</div></section>' +
-      '<footer class="foot">Correct = 100 points + up to 50 for speed · wrong or no answer = 0.</footer></main>';
+      '<footer class="foot">Correct = 100 points + up to 50 for speed + combo bonus · wrong or no answer = 0.</footer></main>';
+    if (anim) { B.seen = true; saveB(); playRewards(res, tt, rw, L0, L1); }
+  }
+  function maxCombo(who) { var m = 0; B.rounds.forEach(function (r) { var c = who === 'me' ? r.combo : r.bot.combo; if (c > m) m = c; }); return m; }
+  function bstat(l, a, b) { return '<div class="bs-row"><b>' + a + '</b><span>' + l + '</span><b>' + b + '</b></div>'; }
+  function playRewards(res, tt, rw, L0, L1) {
+    later(function () { sfx(res === 'w' ? 'win' : res === 'l' ? 'lose' : 'draw'); if (res === 'w') { confetti(170); buzz([30, 50, 30]); } }, wait(250));
+    later(function () { countTo($('#fbY'), 0, tt.y, 900); countTo($('#fbB'), 0, tt.b, 900); }, wait(700));
+    var t = 1500 + rw.lines.length * 260;
+    later(function () { countTo($('#rwTotal'), 0, rw.total, 700, function () { sfx('xp'); }); }, wait(1500));
+    later(function () { fillXp(L0, L1); }, wait(t));
+    if (rw.badges.length) later(function () { var nb = $('.new-badges'); if (nb) nb.classList.add('show'); sfx('badge'); }, wait(t + (L1.L > L0.L ? 2600 : 1100)));
+  }
+  function fillXp(L0, L1) {
+    var bar = $('#rwBar'), lv = $('#rwLv'), xp = $('#rwXp'); if (!bar) return;
+    if (L1.L > L0.L) {
+      bar.style.width = '100%';
+      later(function () {
+        sfx('level'); levelUp(L1.L);
+        if (lv) { lv.textContent = 'Level ' + L1.L; lv.classList.add('up'); }
+        bar.style.transition = 'none'; bar.style.width = '0%'; void bar.offsetWidth; bar.style.transition = '';
+        later(function () { bar.style.width = pct(L1.into, L1.need) + '%'; if (xp) xp.textContent = L1.into + ' / ' + L1.need + ' XP'; }, 120);
+      }, wait(900));
+    } else { bar.style.width = pct(L1.into, L1.need) + '%'; if (xp) xp.textContent = L1.into + ' / ' + L1.need + ' XP'; }
+  }
+  function levelUp(L) {
+    if (RM) { toast('Level up! You’re now level ' + L + '.'); return; }
+    var el = document.createElement('div'); el.className = 'lvlup'; el.setAttribute('role', 'status');
+    el.innerHTML = '<div class="lu-rays"></div><div class="lu-card"><small>LEVEL UP!</small><b>' + L + '</b><span>Keep battling to climb.</span></div>';
+    document.body.appendChild(el); el.addEventListener('click', function () { if (el.parentNode) el.parentNode.removeChild(el); });
+    setTimeout(function () { el.classList.add('out'); setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 400); }, 2000);
   }
   function openQuestion(k) {
-    var it = B.list[k], q = qOf(it), sec = it.sec, r = B.rounds[k], key = keyOf(sec, q), bot = BOTS[B.bot];
+    var it = B.list[k], q = qOf(it), sec = it.sec, r = B.rounds[k], key = keyOf(sec, q), on = esc(oppName());
     var ch = q.t === 'mcq' ? '<div class="choices review">' + q.c.map(function (c, j) {
       var L = 'ABCD'.charAt(j), isKey = L === key, mine = L === r.a;
-      return '<div class="choice-row' + (isKey ? ' key' : '') + (mine && !isKey ? ' wrong' : '') + '"><div class="choice"><span class="letter">' + L + '</span><span class="ctext">' + c + '</span><span class="ctags">' + (mine ? '<span class="who-tag you">' + (isKey ? I.check : I.cross) + ' You</span>' : '') + (r.bot.a === L ? '<span class="who-tag bot ' + (isKey ? 'ok' : 'bad') + '">' + bot.name + '</span>' : '') + (isKey && !mine ? '<span class="tag ok">' + I.check + ' Correct</span>' : '') + '</span></div></div>';
+      return '<div class="choice-row' + (isKey ? ' key' : '') + (mine && !isKey ? ' wrong' : '') + '"><div class="choice"><span class="letter">' + L + '</span><span class="ctext">' + c + '</span><span class="ctags">' + (mine ? '<span class="who-tag you">' + (isKey ? I.check : I.cross) + ' You</span>' : '') + (r.bot.a === L ? '<span class="who-tag bot ' + (isKey ? 'ok' : 'bad') + '">' + on + '</span>' : '') + (isKey && !mine ? '<span class="tag ok">' + I.check + ' Correct</span>' : '') + '</span></div></div>';
     }).join('') + '</div>' : '<div class="spr-review"><div><small>Your answer</small><b class="' + (r.ok ? 'ok' : r.a ? 'bad' : 'om') + '">' + esc(r.a || '—') + '</b></div><div><small>Correct answer</small><b class="ok">' + esc(keyText(sec, q)) + '</b></div></div>';
     modal({ title: 'Question ' + (k + 1) + ' · ' + SEC[sec].short, cls: 'wide review-modal',
       body: '<div class="rq-meta"><span class="dtag ' + q.d.toLowerCase() + '"><i></i>' + DIFF[q.d] + '</span><span class="chip">' + esc(q.sk) + '</span></div>' + (q.p ? '<div class="passage boxed">' + q.p + '</div>' : '') + '<div class="prompt">' + q.q + '</div>' + ch +
         '<div class="explain"><b>' + I.spark + ' Explanation</b><div>' + q.x + '</div></div>',
       actions: (sec === 'math' ? [{ label: I.calc + ' Desmos', action: 'rev-calc', kind: 'ghost calc-btn' }] : []).concat([{ label: 'Close', action: 'layer-close', kind: 'primary' }]) });
+  }
+  function resumeBattle() {
+    closeLayer(); clearTimers();
+    var secs = {}; B.list.forEach(function (it) { secs[it.sec] = 1; });
+    $app.className = 'app page'; $app.innerHTML = '<div class="boot"><div class="boot-mark"></div><p>Loading your battle…</p></div>';
+    loadBanks(Object.keys(secs), function (ok) {
+      if (!ok) { $app.innerHTML = '<div class="boot"><p>Couldn’t load the questions.</p><button class="btn primary" onclick="location.reload()">Try again</button></div>'; return; }
+      if (B.status === 'done') return screenResult();
+      var r = B.rounds[B.i];
+      if (!r || !B.qStart) beginQuestion(); else screenBattle();
+    });
+  }
+  function rematch() {
+    if (!B) return screenHub();
+    flow.mode = B.mode; flow.fmt = B.fmt;
+    var opp = B.opp, f = FORMATS[B.fmt];
+    loadBanks(f.mix.map(function (m) { return m[0]; }), function (ok) { if (ok) startBattle(opp); });
   }
 
   /* =================================================================== reference + Desmos */
@@ -516,10 +1007,23 @@
       case 'layer-close': closeLayer(); break;
       case 'rev-calc': toggleReviewCalc(t); break;
       case 'theme': toggleTheme(); break;
-      case 'pick-fmt': choice.fmt = t.getAttribute('data-id'); Store.set('isatprep:battle:fmt', choice.fmt); $$('.fmt-card').forEach(function (b) { b.classList.toggle('on', b === t); }); break;
-      case 'pick-bot': choice.bot = t.getAttribute('data-id'); Store.set('isatprep:battle:bot', choice.bot); $$('.bot-card').forEach(function (b) { b.classList.toggle('on', b === t); }); break;
+      case 'sound': toggleSound(); break;
+      case 'mode': pickMode(t.getAttribute('data-id'), t); break;
+      case 'drop-go': closeLayer(); Store.del(KEY); B = null; var pm = flow.pendingMode; flow.pendingMode = null; screenHub(); if (pm) pickMode(pm, $('.mode[data-id="' + pm + '"]')); break;
+      case 'pick-subj': pickSubject(t.getAttribute('data-id'), t); break;
+      case 'pick-opp': pickOpponent(t.getAttribute('data-id'), t); break;
+      case 'back-subj': sfx('tap'); screenSubject(); break;
+      case 'hub': sfx('tap'); screenHub(); break;
+      case 'cancel-search': cancelSearch(); break;
+      case 'fb-bot': if (mm) clearInterval(mm.iv); mm = null; flow.mode = 'bot'; sfx('pick'); screenOpponent(); break;
+      case 'fb-friend': if (mm) clearInterval(mm.iv); mm = null; flow.mode = 'friend'; sfx('pick'); screenInvite(); break;
+      case 'fb-again': sfx('tap'); screenSearch(); break;
+      case 'copy-link': copyLink(t.getAttribute('data-url'), t); break;
+      case 'profile': sfx('tap'); openProfile(null, false); break;
+      case 'pf-av': pfAv = +t.getAttribute('data-i'); sfx('tap'); $$('.pf-av').forEach(function (b) { b.classList.toggle('on', b === t); }); var pv = $('#pfPrev'); if (pv) pv.innerHTML = avatar(pfAv, 72); break;
+      case 'pf-save': saveProfile(); break;
+      case 'ranks': sfx('tap'); openRanks(); break;
       case 'resume': resumeBattle(); break;
-      case 'start-new': startBattle(); break;
       case 'choose': choose(t.getAttribute('data-letter')); break;
       case 'spr-key':
         var inp = $('#sprIn'); if (!inp) break; var k = t.getAttribute('data-key'), v = inp.value;
@@ -530,10 +1034,9 @@
       case 'next-q': nextQuestion(); break;
       case 'calc': toggleCalc(); break;
       case 'reference': openReference(); break;
-      case 'quit': modal({ title: 'Quit this battle?', cls: 'narrow', body: '<p>The battle ends without a result. Your record doesn’t change.</p>', actions: [{ label: 'Keep playing', action: 'layer-close' }, { label: 'Quit', action: 'quit-yes', kind: 'primary' }] }); break;
-      case 'quit-yes': closeLayer(); stopTicker(); clearTimeout(view.revealTimer); Store.del(KEY); B = null; screenStart(); break;
-      case 'rematch': choice.fmt = B.fmt; choice.bot = B.bot; startBattle(); break;
-      case 'new-battle': screenStart(); break;
+      case 'quit': modal({ title: 'Quit this battle?', cls: 'narrow', body: '<p>The battle ends without a result. You get no XP and your record doesn’t change.</p>', actions: [{ label: 'Keep playing', action: 'layer-close' }, { label: 'Quit', action: 'quit-yes', kind: 'primary' }] }); break;
+      case 'quit-yes': closeLayer(); stopTicker(); clearTimeout(view.revealTimer); Store.del(KEY); B = null; screenHub(); break;
+      case 'rematch': sfx('pick'); rematch(); break;
       case 'open-q': openQuestion(+t.getAttribute('data-k')); break;
     }
   });
@@ -548,5 +1051,10 @@
 
   /* =================================================================== boot */
   applyTheme();
-  if (B && B.status === 'live' && B.list && B.list.length) resumeBattle(); else screenStart();
+  if (PREVIEW) window.__battle = { fallbackNow: fallback, levelUp: levelUp, profile: function () { return P; }, battle: function () { return B; } };
+  if (B && B.status === 'live' && B.list && B.list.length) resumeBattle();
+  else {
+    screenHub();
+    if (/[?&]room=/.test(QS) && !ONLINE) toast('Friend battles open soon. Battle a bot for now!');
+  }
 })();
