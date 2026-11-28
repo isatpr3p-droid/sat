@@ -512,3 +512,15 @@ html[data-theme="dark"] .resume-card { border-color: #2c3566; }
   .jb-row { grid-column: 1 / -1; }
   .jb-row input { flex: 1; width: auto; min-width: 0; }
 }
+
+/* live "N online" counter */
+.hub-chips { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.live-pill { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 750; color: #0f7a46; background: #dcf7e8; padding: 5px 11px; border-radius: 999px; white-space: nowrap; }
+.live-pill[hidden] { display: none; }
+.live-pill i { width: 8px; height: 8px; border-radius: 50%; background: #19c37d; animation: live 1.6s infinite; }
+.live-pill b { font-variant-numeric: tabular-nums; }
+.live-pill.bump b { display: inline-block; animation: popIn .35s; }
+.mm .live-pill { margin-left: 10px; background: rgba(255, 255, 255, .18); color: #fff; }
+html[data-theme="dark"] .live-pill { background: #12392a; color: #5fe0a2; }
+html[data-theme="dark"] .mm .live-pill { background: rgba(255, 255, 255, .14); color: #fff; }
+@media (prefers-reduced-motion: reduce) { .live-pill i, .live-pill.bump b { animation: none; } }

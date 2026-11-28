@@ -523,6 +523,31 @@
   function paintWait(m) { var t = $('#waitTxt'); if (t) t.textContent = waitText(m.opp_n || 0); }
   function oppIn(r) { return B.net ? (B.net.oppN || 0) > B.i : (now() - B.qStart >= r.bot.ms && r.bot.ms <= limitOf(curItem())); }
 
+  // ---- live "N online": everyone with Battle Mode open joins one Supabase Realtime presence channel
+  var LIVE = { ch: null, n: 0 };
+  function livePid() {
+    var k = 'isatprep:battle:pid' + KSUF, v = Store.get(k);
+    if (!v) { v = Math.random().toString(36).slice(2, 12); Store.set(k, v); }
+    return v;                                   // one id per browser, so several open tabs count once
+  }
+  function liveStart() {
+    if (!ONLINE || LIVE.ch) return;
+    sbClient().then(function (sb) {
+      if (LIVE.ch) return;
+      LIVE.ch = sb.channel('online-battle', { config: { presence: { key: livePid() } } });
+      LIVE.ch.on('presence', { event: 'sync' }, function () { LIVE.n = Object.keys(LIVE.ch.presenceState() || {}).length; paintLive(); })
+        .subscribe(function (st) { if (st === 'SUBSCRIBED') LIVE.ch.track({ t: now() }).catch(noop); });
+    }).catch(noop);
+  }
+  function liveHTML() { return '<span class="live-pill"' + (LIVE.n ? '' : ' hidden') + ' title="Players with Battle Mode open right now"><i></i><b>' + LIVE.n + '</b> online</span>'; }
+  function paintLive() {
+    $$('.live-pill').forEach(function (el) {
+      el.hidden = !LIVE.n;
+      var b = el.querySelector('b');
+      if (b && b.textContent !== String(LIVE.n)) { b.textContent = LIVE.n; el.classList.toggle('bump', false); void el.offsetWidth; el.classList.toggle('bump', true); }
+    });
+  }
+
   // ---- league table on the hub
   function loadBoard(scope) {
     if (!ONLINE) return;
@@ -609,7 +634,7 @@
       '<main class="hub">' +
       (live ? '<div class="resume-card"><div class="rs-l">' + oppFace(40) + '<div><b>Battle in progress</b><span>vs ' + esc(oppName()) + ' · ' + FORMATS[B.fmt].name + ' · question ' + Math.min(B.i + 1, B.list.length) + ' of ' + B.list.length + '</span></div></div><button class="gbtn sm" data-action="resume">Continue ' + I.chevRight + '</button></div>' : '') +
       pcardHTML() +
-      '<div class="hub-h"><h2>Choose your battle</h2>' + (P.lastWinDay !== dayKey() ? '<span class="daily">' + I.spark + ' First win today = double XP</span>' : '') + '</div>' +
+      '<div class="hub-h"><h2>Choose your battle</h2><div class="hub-chips">' + (ONLINE ? liveHTML() : '') + (P.lastWinDay !== dayKey() ? '<span class="daily">' + I.spark + ' First win today = double XP</span>' : '') + '</div></div>' +
       '<section class="modes">' + Object.keys(MODES).map(function (id, i) {
         var m = MODES[id], open = modeOpen(id);
         return '<button class="mode m-' + id + (open ? '' : ' soon') + '" data-action="mode" data-id="' + id + '" style="--i:' + i + '">' +
@@ -799,7 +824,7 @@
       '<h1 class="mm-title" id="mmTitle">' + (isBot ? 'Waking up ' + BOTS[flow.bot].name + '…' : 'Finding an opponent') + '</h1>' +
       '<p class="mm-sub">' + f.name + ' · ' + f.blurb + '</p>' +
       '<div class="mm-timer" id="mmTimer">0:00</div>' +
-      '<div class="mm-extra" id="mmExtra">' + (isBot ? '' : '<span class="mm-online"><i></i>' + (DEMO ? 'Demo: simulated players' : 'Searching players at your level') + '</span>') + '</div>' +
+      '<div class="mm-extra" id="mmExtra">' + (isBot ? '' : '<span class="mm-online"><i></i>' + (DEMO ? 'Demo: simulated players' : 'Searching players at your level') + '</span>' + (ONLINE ? liveHTML() : '')) + '</div>' +
       '</main>';
     mm.iv = setInterval(function () { var el = $('#mmTimer'); if (!el) { clearInterval(mm.iv); return; } el.textContent = fmtS(now() - mm.t0); }, 250);
     var secs = f.mix.map(function (m) { return m[0]; });
@@ -1441,6 +1466,7 @@
     screenHub();
     if (roomCode) toast('Friend battles open soon. Battle a bot for now!');
   }
+  liveStart();
   // Signed in before? Load the card from the account (rating, XP from other devices).
   if (ONLINE) hasSession().then(function (yes) {
     if (!yes && !P.nick) return;            // no card yet: the library is loaded, sign-in waits for the card
