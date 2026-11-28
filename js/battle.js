@@ -756,7 +756,6 @@
     r.combo = r.ok ? prev + 1 : 0;
     r.pts = r.ok ? points(true, ms, lim) + comboBonus(prev) : 0;
     stopTicker();
-    var botLate = r.bot.ms > ms && r.bot.ms <= lim;
     var finish = function () {
       r.done = true; view.showX = false; saveB();
       var from = $('#answerArea');
@@ -765,15 +764,10 @@
       if (r.combo >= 2) later(function () { sfx('combo'); }, 180);
       floatText('+' + r.pts, from, $('#sbYou'), r.ok ? 'ok' : 'zero');
       later(function () { floatText('+' + r.bot.pts, $('#botStatus') || $('#roundBox'), $('#sbBot'), r.bot.ok ? 'opp' : 'zero'); }, 220);
-      later(paintScore, wait(650));
+      later(paintScore, wait(300));
     };
-    saveB(); sfx('lock');
-    if (botLate && !timedOut) {          // the opponent hasn't answered yet: a short "answering…" moment, its time still counts as rolled
-      var st = $('#botStatus'); if (st) st.innerHTML = oppStatus('answering');
-      var lb = $('#lockBtn'); if (lb) { lb.disabled = true; lb.innerHTML = I.check + ' Locked in'; }
-      $$('.choice').forEach(function (c) { c.setAttribute('data-action', ''); });
-      view.revealTimer = setTimeout(finish, 900);
-    } else finish();
+    // Reveal straight away, even if the opponent hasn't "answered" yet (its time was rolled at the start).
+    saveB(); finish();
   }
   function paintScore() {
     var tt = totals(), before = totals(B.i), a = $('#sbYou'), b = $('#sbBot'), r = B.rounds[B.i];
