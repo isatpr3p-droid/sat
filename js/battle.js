@@ -608,19 +608,7 @@
     $app.innerHTML = brandbar() +
       '<main class="hub">' +
       (live ? '<div class="resume-card"><div class="rs-l">' + oppFace(40) + '<div><b>Battle in progress</b><span>vs ' + esc(oppName()) + ' · ' + FORMATS[B.fmt].name + ' · question ' + Math.min(B.i + 1, B.list.length) + ' of ' + B.list.length + '</span></div></div><button class="gbtn sm" data-action="resume">Continue ' + I.chevRight + '</button></div>' : '') +
-      '<section class="pcard">' +
-        '<div class="pc-glow" aria-hidden="true"></div>' +
-        '<div class="pc-id">' +
-          '<button class="pc-av" data-action="profile" aria-label="Edit your battle card">' + lvRing(lv) + meFace(78) + '<span class="pc-lvl">' + lv.L + '</span></button>' +
-          '<div class="pc-main"><div class="pc-name">' + (P.nick ? esc(P.nick) : 'New player') + '<button class="pc-edit" data-action="profile" aria-label="Edit name and avatar">' + I.edit + '</button></div>' +
-            '<div class="pc-lv">Level ' + lv.L + ' <span>' + lv.into + ' / ' + lv.need + ' XP</span></div>' +
-            '<div class="xpbar"><i style="width:' + pct(lv.into, lv.need) + '%"></i></div>' +
-            '<button class="pc-rank" data-action="ranks">' + rankBadge(rk, 22) + '<span>' + (rk ? rk.name + ' · ' + P.rating : 'Unranked') + '</span>' + I.chevRight + '</button></div>' +
-        '</div>' +
-        '<div class="pc-stats">' +
-          stat(P.w, 'Wins') + stat(played ? pct(P.w, played) + '%' : '–', 'Win rate') + stat((P.streak >= 2 ? '🔥' : '') + P.streak, 'Win streak') + stat(P.answered ? pct(P.correct, P.answered) + '%' : '–', 'Accuracy') +
-        '</div>' +
-      '</section>' +
+      pcardHTML() +
       '<div class="hub-h"><h2>Choose your battle</h2>' + (P.lastWinDay !== dayKey() ? '<span class="daily">' + I.spark + ' First win today = double XP</span>' : '') + '</div>' +
       '<section class="modes">' + Object.keys(MODES).map(function (id, i) {
         var m = MODES[id], open = modeOpen(id);
@@ -653,6 +641,28 @@
       '</main>';
     if (ONLINE) loadBoard(NET.scope);
   }
+  function pcardHTML() {
+    var lv = lvl(P.xp), rk = P.rating ? rankOf(P.rating) : null, played = P.w + P.l + P.d;
+    return '<section class="pcard">' +
+        '<div class="pc-glow" aria-hidden="true"></div>' +
+        '<div class="pc-id">' +
+          '<button class="pc-av" data-action="profile" aria-label="Edit your battle card">' + lvRing(lv) + meFace(78) + '<span class="pc-lvl">' + lv.L + '</span></button>' +
+          '<div class="pc-main"><div class="pc-name">' + (P.nick ? esc(P.nick) : 'New player') + '<button class="pc-edit" data-action="profile" aria-label="Edit name and avatar">' + I.edit + '</button></div>' +
+            '<div class="pc-lv">Level ' + lv.L + ' <span>' + lv.into + ' / ' + lv.need + ' XP</span></div>' +
+            '<div class="xpbar"><i style="width:' + pct(lv.into, lv.need) + '%"></i></div>' +
+            '<button class="pc-rank" data-action="ranks">' + rankBadge(rk, 22) + '<span>' + (rk ? rk.name + ' · ' + P.rating : 'Unranked') + '</span>' + I.chevRight + '</button></div>' +
+        '</div>' +
+        '<div class="pc-stats">' +
+          stat(P.w, 'Wins') + stat(played ? pct(P.w, played) + '%' : '–', 'Win rate') + stat((P.streak >= 2 ? '🔥' : '') + P.streak, 'Win streak') + stat(P.answered ? pct(P.correct, P.answered) + '%' : '–', 'Accuracy') +
+        '</div>' +
+      '</section>';
+  }
+  // After the account loads in the background: swap in the new card, no animations replayed.
+  function refreshCard() {
+    var old = $('.pcard'); if (!old) return;
+    var t = document.createElement('div'); t.innerHTML = pcardHTML(); var nw = t.firstChild;
+    nw.style.animation = 'none'; old.parentNode.replaceChild(nw, old);
+  }
   function stat(v, l) { return '<div class="st"><b>' + v + '</b><small>' + l + '</small></div>'; }
   function lvRing(lv) {
     var r = 46, c = 2 * Math.PI * r, k = lv.into / lv.need;
@@ -663,6 +673,7 @@
   var afterProfile = null, pfAv = 0;
   function openProfile(after, first, err) {
     afterProfile = after || null; pfAv = P.av || 0;
+    if (ONLINE) netAuth().catch(noop);
     modal({ title: first ? 'Create your battle card' : 'Your battle card', cls: 'narrow pf-modal',
       body: '<div class="pf-top"><span id="pfPrev">' + avatar(pfAv, 72) + '</span><div><b id="pfNickPrev">' + esc(P.nick || 'Your name') + '</b><small>Level ' + lvl(P.xp).L + '</small></div></div>' +
         '<label class="field"><span>Nickname</span><input id="pfNick" type="text" maxlength="16" autocomplete="nickname" spellcheck="false" placeholder="e.g. Aziza_07" value="' + esc(P.nick) + '"></label>' +
@@ -681,9 +692,9 @@
     var inp = $('#pfNick'), nk = cleanNick(inp ? inp.value : ''), er = $('#pfErr');
     if (nk.length < 3) { er.textContent = 'Pick a nickname with at least 3 letters or numbers.'; er.hidden = false; if (inp) inp.focus(); sfx('bad'); return; }
     if (ONLINE) {
-      var btn = $('[data-action="pf-save"]'); if (btn) { if (btn.disabled) return; btn.disabled = true; }
+      var btn = $('[data-action="pf-save"]'); if (btn) { if (btn.disabled) return; btn.disabled = true; btn.setAttribute('data-label', btn.innerHTML); btn.innerHTML = 'Saving…'; }
       netSaveNick(nk, pfAv).then(function () { profileSaved(nk); }, function (e) {
-        if (btn) btn.disabled = false;
+        if (btn) { btn.disabled = false; btn.innerHTML = btn.getAttribute('data-label') || 'Save'; }
         if (e.message === 'nick_taken' || e.message === 'bad_nick') { er.textContent = e.message === 'nick_taken' ? NICK_TAKEN : 'Use only letters, numbers, spaces, dots and underscores.'; er.hidden = false; sfx('bad'); if (inp) inp.focus(); return; }
         profileSaved(nk);        // offline: kept on this device and saved online next time
       });
@@ -711,18 +722,7 @@
       toast(id === 'quick' ? 'Quick Match opens soon. Battle a bot for now!' : 'Friend battles open soon. Battle a bot for now!'); return;
     }
     if (!P.nick) { openProfile(function () { pickMode(id, $('.mode[data-id="' + id + '"]') || card); }, true); return; }
-    if (MODES[id].online && ONLINE && !NET.me) {
-      if (card) card.classList.add('busy');
-      netReady().then(function () {
-        if (card) card.classList.remove('busy');
-        if (NET.me) pickMode(id, $('.mode[data-id="' + id + '"]') || card);
-      }, function (e) {
-        if (card) card.classList.remove('busy');
-        if (e.message === 'nick_taken') openProfile(function () { pickMode(id, $('.mode[data-id="' + id + '"]') || card); }, false, NICK_TAKEN);
-        else toast(netErrText(e));
-      });
-      return;
-    }
+    if (MODES[id].online && ONLINE) netReady().catch(noop);     // keeps connecting while the subject is picked
     if (B && B.status === 'live') {
       modal({ title: 'Start a new battle?', cls: 'narrow', body: '<p>Your battle against <b>' + esc(oppName()) + '</b> isn’t finished. Starting a new one ends it without a result.</p>', actions: [{ label: 'Continue old battle', action: 'resume' }, { label: 'Start new battle', action: 'drop-go', kind: 'primary' }] });
       flow.pendingMode = id; return;
@@ -730,7 +730,7 @@
     flow.mode = id; sfx('pick'); sfx('whoosh');
     if (card) card.classList.add('launch');
     $$('.mode').forEach(function (m) { if (m !== card) m.classList.add('dim'); });
-    later(screenSubject, wait(320));
+    later(screenSubject, wait(170));
   }
   function flowTop(step, of) {
     var m = MODES[flow.mode];
@@ -750,7 +750,7 @@
   function pickSubject(id, tile) {
     flow.fmt = id; choice.fmt = id; Store.set('isatprep:battle:fmt', id); sfx('pick');
     $$('.subj').forEach(function (t) { t.classList.add(t === tile ? 'chosen' : 'fade'); });
-    later(function () { if (flow.mode === 'bot') screenOpponent(); else if (flow.mode === 'friend') screenInvite(); else screenSearch(); }, wait(480));
+    later(function () { if (flow.mode === 'bot') screenOpponent(); else if (flow.mode === 'friend') screenInvite(); else screenSearch(); }, wait(240));
   }
   function screenOpponent() {
     clearTimers(); closeLayer();
@@ -768,7 +768,7 @@
   function pickOpponent(id, card) {
     flow.bot = id; choice.bot = id; Store.set('isatprep:battle:bot', id); sfx('pick');
     $$('.oc').forEach(function (t) { t.classList.add(t === card ? 'chosen' : 'fade'); });
-    later(screenSearch, wait(480));
+    later(screenSearch, wait(240));
   }
 
   /* --------------------------------------------------------------- matchmaking */
@@ -801,14 +801,20 @@
     if (DEMO) { if (!EMPTY) later(function () { cb(demoPlayer()); }, wait(Math.round(rnd(3200, 6000)))); return; }
     var fmt = flow.fmt, my = mm;
     my.stop = function () { if (my.stopped) return; my.stopped = true; if (!my.found) rpc('bm_leave_queue').catch(noop); };
-    (function poll() {
+    netReady().then(function () { if (!my.stopped && mm === my) poll(); }, function (e) {
+      if (my.stopped || mm !== my) return;
+      stopSearch(); clearTimers();
+      if (e.message === 'nick_taken') openProfile(function () { screenSearch(); }, false, NICK_TAKEN);
+      else { toast(netErrText(e)); screenHub(); }
+    });
+    function poll() {
       if (my.stopped || mm !== my || my.found) return;
       rpc('bm_queue', { p_fmt: fmt }).then(function (m) {
         if (!m) { later(poll, 2000); return; }
         if (my.stopped || mm !== my) { rpc('bm_forfeit', { p_id: m.id }).catch(noop); return; }
         cb(oppFromMatch(m));
       }, function () { later(poll, 4000); });
-    })();
+    }
   }
   function demoPlayer() { return { kind: 'human', nick: pick(DEMO_NICKS), av: Math.floor(Math.random() * AVATARS.length), lvl: Math.floor(rnd(2, 16)), as: 'ace' }; }
   function fallback() {
@@ -1419,7 +1425,7 @@
   }
   // Signed in before? Load the card from the account (rating, XP from other devices).
   if (ONLINE) hasSession().then(function (yes) {
-    if (!yes) return;
-    netReady().then(function () { if ($('.hub') && !$layer.classList.contains('open')) screenHub(); }, noop);
+    if (!yes && !P.nick) return;            // no card yet: the library is loaded, sign-in waits for the card
+    netReady().then(function () { refreshCard(); }, noop);
   }, noop);
 })();

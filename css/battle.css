@@ -83,7 +83,7 @@
 .mode-soon { position: relative; margin-top: auto; display: inline-flex; align-items: center; gap: 6px; background: rgba(0, 0, 0, .2); font-weight: 800; font-size: 14px; padding: 7px 13px; border-radius: 12px; }
 .mode-soon svg { width: 15px; height: 15px; }
 .mode.soon { filter: saturate(.55); opacity: .82; cursor: pointer; }
-.mode.launch { animation: launch .32s forwards; z-index: 2; }
+.mode.launch { animation: launch .18s forwards; z-index: 2; }
 .mode.dim { opacity: .25; transform: scale(.96); }
 .shake { animation: shake .4s !important; }
 
@@ -154,7 +154,7 @@
 .subj-time { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; font-weight: 750; color: var(--muted); background: var(--bg); padding: 4px 10px; border-radius: 999px; }
 .subj-time svg { width: 14px; height: 14px; }
 .subj-last, .oc .opp-last { position: absolute; top: 12px; right: 12px; font-size: 11px; font-weight: 800; color: var(--brand); background: var(--brand-50); padding: 3px 8px; border-radius: 999px; }
-.subj.chosen, .oc.chosen { animation: chosen .48s forwards; z-index: 2; }
+.subj.chosen, .oc.chosen { animation: chosen .25s forwards; z-index: 2; }
 .subj.fade, .oc.fade { opacity: .2; transform: scale(.94); pointer-events: none; }
 .oc { position: relative; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 24px 16px 16px; border-radius: 24px; border: 0; background: var(--panel); color: var(--ink); box-shadow: 0 7px 0 var(--line-2), 0 16px 28px rgba(20, 26, 43, .1); cursor: pointer; text-align: center; animation: flipIn .55s both; animation-delay: calc(var(--i) * 90ms + 100ms); transition: transform .14s, box-shadow .14s, opacity .3s; }
 .oc:hover { transform: translateY(-5px); box-shadow: 0 12px 0 var(--line-2), 0 22px 36px rgba(20, 26, 43, .14); }
