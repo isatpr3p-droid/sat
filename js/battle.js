@@ -617,6 +617,7 @@
           '<span class="mode-txt"><b>' + m.name + '</b><small>' + m.sub + '</small><span class="mode-desc">' + m.desc + '</span></span>' +
           (open ? '<span class="mode-cta">Play ' + I.chevRight + '</span>' : '<span class="mode-soon">' + I.lock + ' Soon</span>') + '</button>';
       }).join('') + '</section>' +
+      (ONLINE ? joinBarHTML() : '') +
       '<section class="hub-grid">' +
         (ONLINE ? leagueHTML() :
         '<div class="hpanel league"><div class="hp-head"><h3>' + I.trophy + ' Weekly league</h3><span class="chip-soft">Opens with online battles</span></div>' +
@@ -662,6 +663,19 @@
     var old = $('.pcard'); if (!old) return;
     var t = document.createElement('div'); t.innerHTML = pcardHTML(); var nw = t.firstChild;
     nw.style.animation = 'none'; old.parentNode.replaceChild(nw, old);
+  }
+  function joinBarHTML() {
+    return '<form class="joinbar" id="joinBar" autocomplete="off"><span class="jb-ico">' + I.link + '</span><label for="joinCode">Got a room code from a friend?</label>' +
+      '<div class="jb-row"><input id="joinCode" type="text" inputmode="text" maxlength="40" placeholder="ABCDE" autocapitalize="characters" autocorrect="off" spellcheck="false" aria-label="Room code">' +
+      '<button class="gbtn sm" type="submit">Join ' + I.chevRight + '</button></div></form>';
+  }
+  // Accepts the 5-letter code or a whole pasted invite link.
+  function submitJoin(form) {
+    var inp = $('#joinCode', form), raw = String(inp.value || '').trim();
+    var m = raw.match(/[?&]room=([A-Za-z0-9]+)/), code = (m ? m[1] : raw).toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (code.length !== 5) { sfx('bad'); form.classList.remove('shake'); void form.offsetWidth; form.classList.add('shake'); toast('Room codes have 5 letters and numbers, like K7Q2M.'); inp.focus(); return; }
+    if (B && B.status === 'live') { toast('Finish or quit your current battle first.'); return; }
+    sfx('pick'); inp.blur(); joinRoom(code);
   }
   function stat(v, l) { return '<div class="st"><b>' + v + '</b><small>' + l + '</small></div>'; }
   function lvRing(lv) {
@@ -741,6 +755,7 @@
     $app.className = 'app page battle-page';
     var icons = { rw: I.book, math: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 4H7l6 8-6 8h10" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>', mixed: I.bolt };
     $app.innerHTML = brandbar() + '<main class="flow">' + flowTop(1, flow.mode === 'bot' ? 2 : 1) +
+      (flow.mode === 'friend' && ONLINE ? joinBarHTML() : '') +
       '<h1 class="flow-title">Pick your subject</h1><p class="flow-sub">' + (flow.mode === 'quick' ? 'You’ll be matched with someone playing the same subject.' : flow.mode === 'friend' ? 'Your friend gets the same questions.' : 'The bot gets the same questions you do.') + '</p>' +
       '<div class="subj-grid">' + Object.keys(FORMATS).map(function (id, i) {
         var f = FORMATS[id];
@@ -1362,6 +1377,9 @@
   }
 
   /* =================================================================== events */
+  document.addEventListener('submit', function (e) {
+    if (e.target && e.target.id === 'joinBar') { e.preventDefault(); submitJoin(e.target); }
+  });
   document.addEventListener('click', function (e) {
     var t = e.target.closest('[data-action]'); if (!t) return;
     var a = t.getAttribute('data-action');
