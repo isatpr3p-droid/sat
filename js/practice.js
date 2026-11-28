@@ -721,7 +721,7 @@
     modal({ title: SEC[sec].short + ' · Question ' + n, cls: 'wide review-modal',
       body: '<div class="rq-meta"><span class="dtag ' + q.d.toLowerCase() + '"><i></i>' + DIFF[q.d] + '</span><span class="chip">' + esc(q.dom) + '</span><span class="chip">' + esc(q.sk) + '</span></div>' +
         (q.p ? '<div class="passage boxed">' + q.p + '</div>' : '') + '<div class="prompt">' + q.q + '</div>' + choices + '<div class="explain"><b>' + I.spark + ' Explanation</b><div>' + q.x + '</div></div>',
-      actions: [{ label: 'Close', action: 'layer-close' }, { label: 'Practice this question', action: 'rep-practice', kind: 'primary' }] });
+      actions: (sec === 'math' ? [{ label: I.calc + ' Desmos', action: 'rev-calc', kind: 'ghost calc-btn' }] : []).concat([{ label: 'Close', action: 'layer-close' }, { label: 'Practice this question', action: 'rep-practice', kind: 'primary' }]) });
     repCursor = { sec: sec, n: n };
   }
   var repCursor = null;
@@ -979,6 +979,24 @@
     s.onerror = function () { clearTimeout(t); fail(); };
     document.head.appendChild(s);
   }
+
+  // Desmos inside a review pop-up (Math questions): the calculator opens beside the question and explanation.
+  function toggleReviewCalc(btn) {
+    var m = $('.modal', $layer); if (!m) return;
+    var on = !m.classList.contains('calc-on');
+    m.classList.toggle('calc-on', on);
+    if (btn) { btn.classList.toggle('on', on); btn.setAttribute('aria-pressed', on); }
+    var box = $('#revCalc', m);
+    if (on) {
+      if (!box) { box = document.createElement('div'); box.id = 'revCalc'; box.className = 'rev-calc'; m.insertBefore(box, $('.modal-body', m)); }
+      box.innerHTML = '<div class="calc-loading"><span class="spin dark"></span> Loading calculator…</div>';
+      loadDesmos(function (ok) {
+        var b = $('#revCalc'); if (!b) return;
+        if (ok) { b.innerHTML = ''; b.appendChild(D.el); setTimeout(function () { try { D.calc.resize(); } catch (e) { } }, 30); }
+        else b.innerHTML = '<div class="calc-fail"><p>The calculator couldn’t load.</p><a class="btn ghost" href="https://www.desmos.com/calculator" target="_blank" rel="noopener">Open Desmos in a new tab</a></div>';
+      });
+    } else if (box) { box.parentNode.removeChild(box); }
+  }
   function mountDesmos() {
     var body = $('#calcBody'); if (!body || !P.ui.calcOpen) return;
     if (D.state === 'ready') { body.innerHTML = ''; body.appendChild(D.el); setTimeout(function () { try { D.calc.resize(); } catch (e) { } }, 30); return; }
@@ -1014,6 +1032,7 @@
     var a = t.getAttribute('data-action');
     switch (a) {
       case 'layer-close': closeLayer(); break;
+      case 'rev-calc': toggleReviewCalc(t); break;
       case 'hl-add': if (pendingHl) { addHl(pendingHl.key, pendingHl.s, pendingHl.e, t.getAttribute('data-c')); pendingHl = null; try { window.getSelection().removeAllRanges(); } catch (x) { } } hideHlBar(); break;
       case 'hl-del': removeHl(t.getAttribute('data-k'), +t.getAttribute('data-i')); hideHlBar(); break;
       case 'hl-color': recolorHl(t.getAttribute('data-k'), +t.getAttribute('data-i'), t.getAttribute('data-c')); hideHlBar(); break;

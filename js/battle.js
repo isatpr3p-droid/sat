@@ -454,7 +454,7 @@
     modal({ title: 'Question ' + (k + 1) + ' · ' + SEC[sec].short, cls: 'wide review-modal',
       body: '<div class="rq-meta"><span class="dtag ' + q.d.toLowerCase() + '"><i></i>' + DIFF[q.d] + '</span><span class="chip">' + esc(q.sk) + '</span></div>' + (q.p ? '<div class="passage boxed">' + q.p + '</div>' : '') + '<div class="prompt">' + q.q + '</div>' + ch +
         '<div class="explain"><b>' + I.spark + ' Explanation</b><div>' + q.x + '</div></div>',
-      actions: [{ label: 'Close', action: 'layer-close', kind: 'primary' }] });
+      actions: (sec === 'math' ? [{ label: I.calc + ' Desmos', action: 'rev-calc', kind: 'ghost calc-btn' }] : []).concat([{ label: 'Close', action: 'layer-close', kind: 'primary' }]) });
   }
 
   /* =================================================================== reference + Desmos */
@@ -477,6 +477,24 @@
     s.onerror = function () { clearTimeout(t); fail(); };
     document.head.appendChild(s);
   }
+
+  // Desmos inside a review pop-up (Math questions): the calculator opens beside the question and explanation.
+  function toggleReviewCalc(btn) {
+    var m = $('.modal', $layer); if (!m) return;
+    var on = !m.classList.contains('calc-on');
+    m.classList.toggle('calc-on', on);
+    if (btn) { btn.classList.toggle('on', on); btn.setAttribute('aria-pressed', on); }
+    var box = $('#revCalc', m);
+    if (on) {
+      if (!box) { box = document.createElement('div'); box.id = 'revCalc'; box.className = 'rev-calc'; m.insertBefore(box, $('.modal-body', m)); }
+      box.innerHTML = '<div class="calc-loading"><span class="spin dark"></span> Loading calculator…</div>';
+      loadDesmos(function (ok) {
+        var b = $('#revCalc'); if (!b) return;
+        if (ok) { b.innerHTML = ''; b.appendChild(D.el); setTimeout(function () { try { D.calc.resize(); } catch (e) { } }, 30); }
+        else b.innerHTML = '<div class="calc-fail"><p>The calculator couldn’t load.</p><a class="btn ghost" href="https://www.desmos.com/calculator" target="_blank" rel="noopener">Open Desmos in a new tab</a></div>';
+      });
+    } else if (box) { box.parentNode.removeChild(box); }
+  }
   function mountDesmos() {
     var body = $('#calcBody'); if (!body) return;
     if (D.state === 'ready') { body.innerHTML = ''; body.appendChild(D.el); setTimeout(function () { try { D.calc.resize(); } catch (e) { } }, 30); return; }
@@ -496,6 +514,7 @@
     var a = t.getAttribute('data-action');
     switch (a) {
       case 'layer-close': closeLayer(); break;
+      case 'rev-calc': toggleReviewCalc(t); break;
       case 'theme': toggleTheme(); break;
       case 'pick-fmt': choice.fmt = t.getAttribute('data-id'); Store.set('isatprep:battle:fmt', choice.fmt); $$('.fmt-card').forEach(function (b) { b.classList.toggle('on', b === t); }); break;
       case 'pick-bot': choice.bot = t.getAttribute('data-id'); Store.set('isatprep:battle:bot', choice.bot); $$('.bot-card').forEach(function (b) { b.classList.toggle('on', b === t); }); break;

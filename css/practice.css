@@ -353,3 +353,18 @@ html[data-theme="dark"] .qm-ftog[aria-pressed="true"] { background: #1f2546 !imp
 html[data-theme="dark"] .tile.cur { box-shadow: 0 0 0 1.5px #171c27, 0 0 0 3.5px #e8ebf2; }
 
 a.tool { text-decoration: none; }
+
+/* Desmos inside review pop-ups (Math) */
+.modal-foot .calc-btn { margin-right: auto; }
+.modal-foot .calc-btn svg { width: 18px; height: 18px; }
+.modal-foot .calc-btn.on { border-color: var(--brand); color: var(--brand-ink); background: var(--brand-50); }
+.modal.calc-on { width: min(1280px, calc(100vw - 24px)); height: calc(100vh - 32px); height: calc(100dvh - 32px); max-height: none;
+  display: grid; grid-template-columns: minmax(340px, 44%) minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; }
+.modal.calc-on .modal-head, .modal.calc-on .modal-foot { grid-column: 1 / -1; }
+.modal.calc-on .modal-body { min-height: 0; }
+.rev-calc { position: relative; min-height: 0; border-right: 1px solid var(--line); background: #fff; }
+.rev-calc .desmos-host { position: absolute; inset: 0; }
+@media (max-width: 899px) {
+  .modal.calc-on { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 46vh minmax(0, 1fr) auto; }
+  .rev-calc { border-right: 0; border-bottom: 1px solid var(--line); }
+}
